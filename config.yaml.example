@@ -1,0 +1,45 @@
+# Конфигурация xyliganimbot
+
+# Ссылка на Google Docs документ
+google_docs:
+  url: "https://docs.google.com/document/d/YOUR_DOCUMENT_ID/edit"
+  # Или используйте document_id для работы через API
+  # document_id: "YOUR_DOCUMENT_ID"
+
+# Белый список пользователей (telegram_id)
+# Пользователи из этого списка могут использовать бота
+users:
+  allowed:
+    - 123456789  # Пример ID пользователя
+    # Добавьте свои telegram_id
+
+# Белый список чатов (chat_id)
+# Бот работает только в чатах из этого списка
+chats:
+  allowed:
+    - -1001234567890  # Пример ID группового чата (отрицательный для групп)
+    # Добавьте свои chat_id
+
+# Белый список администраторов (telegram_id)
+# Администраторы могут использовать админские команды
+admins:
+  - 123456789  # Пример ID администратора
+  # Добавьте свои telegram_id
+
+# Настройки логирования
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/app.log"
+  audit_file: "logs/audit.log"
+  # Логирование текстов сообщений пользователей (по умолчанию false)
+  log_user_messages: false
+  # Ротация логов (размер в байтах, например 10MB = 10485760)
+  max_bytes: 10485760
+  backup_count: 5
+
+# Настройки обновления кэша
+cache:
+  # Интервал обновления в днях (например, 7 = раз в неделю)
+  update_interval_days: 7
+  # Автоматическое обновление (true/false)
+  auto_update: true
