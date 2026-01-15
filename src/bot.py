@@ -5,28 +5,32 @@
 через long polling и базовую обработку сообщений.
 """
 
-import os
 import sys
-from pathlib import Path
+from typing import Dict, List
 
-import yaml
-from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
+from src.config import (
+    load_config,
+    load_secrets,
+    validate_config,
+    get_whitelists,
+    get_logging_config,
+)
 from src.logging import setup_logging, get_logger, get_audit_logger
 
 # Логгеры будут инициализированы после setup_logging()
 logger = None
 audit_logger = None
 
+# Белые списки будут загружены при старте
+whitelists: Dict[str, List[int]] = {}
+
 
 def is_user_allowed(user_id: int, chat_id: int) -> bool:
     """
     Проверяет, разрешен ли доступ пользователю и чату.
-
-    Временная упрощенная реализация. В итерации 3 будет заменена
-    на загрузку белых списков из config.yaml.
 
     Args:
         user_id: Telegram ID пользователя
@@ -35,9 +39,30 @@ def is_user_allowed(user_id: int, chat_id: int) -> bool:
     Returns:
         True если доступ разрешен, False иначе
     """
-    # Временная реализация - пока разрешаем всем
-    # В итерации 3 будет загрузка из config.yaml
-    return True
+    users = whitelists.get("users", [])
+    chats = whitelists.get("chats", [])
+
+    # Проверяем, есть ли пользователь в белом списке
+    user_allowed = not users or user_id in users
+
+    # Проверяем, есть ли чат в белом списке
+    chat_allowed = not chats or chat_id in chats
+
+    return user_allowed and chat_allowed
+
+
+def is_admin(user_id: int) -> bool:
+    """
+    Проверяет, является ли пользователь администратором.
+
+    Args:
+        user_id: Telegram ID пользователя
+
+    Returns:
+        True если пользователь администратор, False иначе
+    """
+    admins = whitelists.get("admins", [])
+    return user_id in admins
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -122,43 +147,60 @@ def main() -> None:
     """
     Основная функция запуска бота.
 
-    Загружает токен из переменных окружения, настраивает логирование,
+    Загружает конфигурацию, настраивает логирование,
     создает приложение и запускает long polling.
     """
-    # Загрузка переменных окружения из .env файла
-    env_path = Path(__file__).parent.parent / ".env"
-    load_dotenv(dotenv_path=env_path)
+    try:
+        # Загрузка конфигурации
+        config = load_config()
+        secrets = load_secrets()
 
-    # Загрузка токена из переменных окружения
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        print("Error: TELEGRAM_BOT_TOKEN not set in environment variables")
+        # Валидация конфигурации
+        validate_config(config, secrets)
+
+        # Загрузка белых списков
+        global whitelists
+        whitelists = get_whitelists(config)
+
+        # Настройка логирования
+        logging_config = get_logging_config(config)
+        log_level = secrets.get("LOG_LEVEL") or logging_config["level"]
+
+        setup_logging(
+            level=log_level,
+            log_file=logging_config["file"],
+            audit_file=logging_config["audit_file"],
+            log_user_messages=logging_config["log_user_messages"],
+            max_bytes=logging_config["max_bytes"],
+            backup_count=logging_config["backup_count"],
+        )
+
+        # Инициализация логгеров после настройки
+        global logger, audit_logger
+        logger = get_logger(__name__)
+        audit_logger = get_audit_logger()
+
+        # Получение токена
+        token = secrets.get("TELEGRAM_BOT_TOKEN")
+        if not token:
+            raise ValueError("TELEGRAM_BOT_TOKEN not set in environment variables")
+
+        logger.info("Starting xyliganimbot...")
+        logger.info(
+            f"Whitelists loaded: {len(whitelists.get('users', []))} users, "
+            f"{len(whitelists.get('chats', []))} chats, "
+            f"{len(whitelists.get('admins', []))} admins"
+        )
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
         sys.exit(1)
-
-    # Настройка логирования
-    log_level = os.getenv("LOG_LEVEL", "INFO")
-    
-    # Временная загрузка log_user_messages из config.yaml
-    # В итерации 3 будет полная загрузка конфигурации
-    log_user_messages = False
-    config_path = Path(__file__).parent.parent / "config.yaml"
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-                if config and "logging" in config:
-                    log_user_messages = config["logging"].get("log_user_messages", False)
-        except Exception as e:
-            print(f"Warning: Failed to load config.yaml: {e}")
-    
-    setup_logging(level=log_level, log_user_messages=log_user_messages)
-    
-    # Инициализация логгеров после настройки
-    global logger, audit_logger
-    logger = get_logger(__name__)
-    audit_logger = get_audit_logger()
-
-    logger.info(f"Starting xyliganimbot... (log_user_messages={log_user_messages})")
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading configuration: {e}")
+        sys.exit(1)
 
     try:
         # Создание приложения
