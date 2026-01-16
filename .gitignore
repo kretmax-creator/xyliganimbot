@@ -46,6 +46,7 @@ logs/*.log.*
 data/*.md
 data/*.json
 !data/.gitkeep
+!data/sections.json
 
 # Kubernetes secrets
 k8s/secret.yaml
