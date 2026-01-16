@@ -6,9 +6,11 @@
 """
 
 import re
+import json
 import zipfile
 import urllib.request
 import urllib.error
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from io import BytesIO
@@ -16,6 +18,149 @@ from io import BytesIO
 from src.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def load_cache(cache_file: Path) -> Optional[Dict[str, Any]]:
+    """
+    Загружает кэш метаданных документа из JSON-файла.
+
+    Args:
+        cache_file: Путь к файлу кэша
+
+    Returns:
+        Словарь с метаданными или None, если файл не существует
+    """
+    if not cache_file.exists():
+        logger.debug(f"Cache file not found: {cache_file}")
+        return None
+
+    try:
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            cache = json.load(f)
+            logger.info(f"Cache loaded from {cache_file}")
+            return cache
+    except json.JSONDecodeError as e:
+        logger.warning(f"Invalid JSON in cache file {cache_file}: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error loading cache from {cache_file}: {e}")
+        return None
+
+
+def save_cache(cache_file: Path, cache_data: Dict[str, Any]) -> None:
+    """
+    Сохраняет кэш метаданных документа в JSON-файл.
+
+    Args:
+        cache_file: Путь к файлу кэша
+        cache_data: Словарь с метаданными для сохранения
+    """
+    try:
+        # Создаем директорию, если её нет
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"Cache saved to {cache_file}")
+    except Exception as e:
+        logger.error(f"Error saving cache to {cache_file}: {e}")
+
+
+def check_cache_needs_update(
+    cache: Optional[Dict[str, Any]],
+    document_id: str,
+    update_interval_days: int = 7
+) -> bool:
+    """
+    Проверяет, нужно ли обновлять кэш документа.
+
+    Args:
+        cache: Словарь с метаданными кэша или None
+        document_id: ID документа для проверки
+        update_interval_days: Интервал обновления в днях
+
+    Returns:
+        True, если кэш нужно обновить, False иначе
+    """
+    if cache is None:
+        logger.info("No cache found, update needed")
+        return True
+
+    # Проверяем document_id
+    cached_document_id = cache.get('document_id')
+    if cached_document_id != document_id:
+        logger.info(
+            f"Document ID changed: {cached_document_id} -> {document_id}, update needed"
+        )
+        return True
+
+    # Проверяем дату последнего обновления
+    last_updated_str = cache.get('last_updated')
+    if not last_updated_str:
+        logger.info("No last_updated in cache, update needed")
+        return True
+
+    try:
+        last_updated = datetime.fromisoformat(last_updated_str)
+        now = datetime.now()
+        days_since_update = (now - last_updated).days
+
+        if days_since_update >= update_interval_days:
+            logger.info(
+                f"Cache is {days_since_update} days old (threshold: {update_interval_days}), update needed"
+            )
+            return True
+        else:
+            logger.info(
+                f"Cache is fresh ({days_since_update} days old), no update needed"
+            )
+            return False
+    except ValueError as e:
+        logger.warning(f"Invalid date format in cache: {last_updated_str}, {e}")
+        return True
+
+
+def get_image_paths(images_dir: Path) -> List[str]:
+    """
+    Получает список путей к изображениям в директории.
+
+    Args:
+        images_dir: Директория с изображениями
+
+    Returns:
+        Список относительных путей к изображениям
+    """
+    if not images_dir.exists():
+        return []
+
+    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+    # Используем set для устранения дубликатов (Windows не различает регистр)
+    images_set = set()
+
+    # Собираем все файлы с нужными расширениями (case-insensitive)
+    for file_path in images_dir.iterdir():
+        if file_path.is_file():
+            file_ext = file_path.suffix.lower()
+            if file_ext in image_extensions:
+                images_set.add(file_path)
+
+    # Преобразуем в список и сортируем для предсказуемости
+    images = sorted(images_set)
+
+    # Возвращаем относительные пути от data/
+    relative_paths = []
+    for img in images:
+        # Получаем путь относительно data/
+        # Если images_dir = data/images, то img.relative_to(data/) = images/filename.png
+        try:
+            # Пытаемся получить путь относительно родителя images_dir
+            rel_path = img.relative_to(images_dir.parent)
+            relative_paths.append(str(rel_path).replace('\\', '/'))
+        except ValueError:
+            # Если не получается, используем полный путь
+            relative_paths.append(str(img).replace('\\', '/'))
+
+    return relative_paths
 
 
 def extract_document_id(url: str) -> Optional[str]:
@@ -271,6 +416,28 @@ def import_document(url: str, output_dir: Path) -> Dict[str, Any]:
         logger.info(f"Document successfully imported:")
         logger.info(f"  HTML file: {html_file}")
         logger.info(f"  Images: {len(images)} files")
+
+        # Сохраняем метаданные в кэш
+        cache_file = output_dir / "knowledge_cache.json"
+        images_dir = output_dir / "images"
+        image_paths = get_image_paths(images_dir)
+
+        # Формируем путь к HTML-файлу относительно data/
+        html_path = None
+        if html_file:
+            try:
+                html_path = str(html_file.relative_to(output_dir.parent)).replace('\\', '/')
+            except ValueError:
+                html_path = str(html_file).replace('\\', '/')
+
+        cache_data = {
+            'content': html_path or str(html_file) if html_file else None,
+            'last_updated': datetime.now().isoformat(),
+            'document_id': document_id,
+            'images': image_paths
+        }
+
+        save_cache(cache_file, cache_data)
 
         return {
             'success': True,
