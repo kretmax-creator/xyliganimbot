@@ -437,6 +437,25 @@ def import_document(url: str, output_dir: Path) -> Dict[str, Any]:
             'images': image_paths
         }
 
+        # Строим поисковый индекс
+        if html_file:
+            try:
+                from src.search import build_index_from_html, save_index_to_cache
+
+                sections_file = output_dir / "sections.json"
+                if sections_file.exists():
+                    logger.info("Building search index...")
+                    index = build_index_from_html(html_file, sections_file)
+                    if index:
+                        cache_data['search_index'] = index
+                        logger.info("Search index built successfully")
+                    else:
+                        logger.warning("Failed to build search index")
+                else:
+                    logger.warning(f"Sections file not found: {sections_file}, skipping index build")
+            except Exception as e:
+                logger.error(f"Error building search index: {e}", exc_info=True)
+
         save_cache(cache_file, cache_data)
 
         return {
