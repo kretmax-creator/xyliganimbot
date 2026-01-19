@@ -2,14 +2,21 @@
 Основной модуль Telegram-бота для xyliganimbot.
 
 Обеспечивает подключение к Telegram Bot API, получение обновлений
-через long polling и базовую обработку сообщений.
+через long polling и обработку команд и сообщений.
 """
 
 import sys
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional, Any
 
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    MessageHandler,
+    CommandHandler,
+    filters,
+    ContextTypes,
+)
 
 from src.config import (
     load_config,
@@ -19,6 +26,8 @@ from src.config import (
     get_logging_config,
 )
 from src.logging import setup_logging, get_logger, get_audit_logger
+from src.search import load_index_from_cache
+from src.handlers import handle_help_command, handle_search_query, init_search_context
 
 # Логгеры будут инициализированы после setup_logging()
 logger = None
@@ -65,60 +74,32 @@ def is_admin(user_id: int) -> bool:
     return user_id in admins
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Базовый обработчик входящих сообщений.
-
-    На текущей итерации только логирует входящие сообщения.
-    В последующих итерациях будет добавлена обработка команд и поиск.
+    Проверяет доступ пользователя и чата к боту.
 
     Args:
         update: Обновление от Telegram
         context: Контекст обработчика
+
+    Returns:
+        True если доступ разрешен, False иначе
     """
-    logger.debug(f"handle_message called for update_id={update.update_id}")
-    
     user = update.effective_user
     chat = update.effective_chat
-    message = update.message
 
-    if not user or not chat or not message:
-        logger.warning(
-            f"Received update without user, chat or message: update_id={update.update_id}, "
-            f"update_type={update.update_type}"
-        )
-        return
+    if not user or not chat:
+        logger.warning("Received update without user or chat")
+        return False
 
-    # Проверка белого списка
     if not is_user_allowed(user.id, chat.id):
         logger.warning(
             f"Access denied: user_id={user.id}, username={user.username}, "
             f"chat_id={chat.id}, chat_type={chat.type}"
         )
-        return
+        return False
 
-    # Логирование входящего сообщения
-    import logging
-    root_logger = logging.getLogger()
-    log_user_messages = getattr(root_logger, "log_user_messages", False)
-    message_text = message.text if message.text else "[non-text message]"
-
-    if log_user_messages:
-        logger.info(
-            f"Received message: user_id={user.id}, username={user.username}, "
-            f"chat_id={chat.id}, text='{message_text}'"
-        )
-    else:
-        logger.info(
-            f"Received message: user_id={user.id}, username={user.username}, "
-            f"chat_id={chat.id}"
-        )
-
-    # Запись в аудит
-    audit_logger.info(
-        f"Message from user_id={user.id}, username={user.username}, "
-        f"chat_id={chat.id}"
-    )
+    return True
 
 
 def create_application(token: str) -> Application:
@@ -133,11 +114,21 @@ def create_application(token: str) -> Application:
     """
     application = Application.builder().token(token).build()
 
-    # Регистрация обработчика всех сообщений
-    # В группах бот получает сообщения, если его упоминают или он администратор
-    # Обрабатываем все сообщения для отладки
+    # Регистрация обработчика команды /help
+    async def help_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if await check_access(update, context):
+            await handle_help_command(update, context)
+
+    application.add_handler(CommandHandler("help", help_wrapper))
+
+    # Регистрация обработчика текстовых сообщений (поисковые запросы)
+    async def search_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if await check_access(update, context):
+            await handle_search_query(update, context)
+
+    # Обрабатываем только текстовые сообщения
     application.add_handler(
-        MessageHandler(filters.ALL, handle_message)
+        MessageHandler(filters.TEXT & ~filters.COMMAND, search_wrapper)
     )
 
     return application
@@ -191,6 +182,35 @@ def main() -> None:
             f"{len(whitelists.get('chats', []))} chats, "
             f"{len(whitelists.get('admins', []))} admins"
         )
+
+        # Загрузка поискового индекса
+        project_root = Path(__file__).parent.parent
+        cache_file = project_root / "data" / "knowledge_cache.json"
+        html_file = project_root / "data" / "knowledge.html"
+        sections_file = project_root / "data" / "sections.json"
+        images_dir = project_root / "data" / "images"
+
+        search_index_data = load_index_from_cache(cache_file)
+        if search_index_data:
+            logger.info("Search index loaded successfully")
+            init_search_context(
+                index=search_index_data,
+                html_file=html_file,
+                sections_file=sections_file,
+                images_dir=images_dir,
+            )
+        else:
+            logger.warning(
+                "Search index not found in cache. "
+                "Bot will work, but search functionality will be limited."
+            )
+            # Инициализируем с пустым индексом, чтобы бот мог работать
+            init_search_context(
+                index={"section_index": {}, "content_index": {}},
+                html_file=html_file,
+                sections_file=sections_file,
+                images_dir=images_dir,
+            )
 
     except FileNotFoundError as e:
         print(f"Error: {e}")
