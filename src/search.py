@@ -388,3 +388,155 @@ def load_index_from_cache(cache_file: Path) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Error loading index from cache: {e}")
         return None
+
+
+def get_section_text(
+    section_title: str, html_file: Path, sections_file: Path
+) -> Optional[str]:
+    """
+    Извлекает текст раздела из HTML-файла.
+
+    Args:
+        section_title: Заголовок раздела
+        html_file: Путь к HTML-файлу
+        sections_file: Путь к файлу с заголовками разделов
+
+    Returns:
+        Текст раздела или None, если не найден
+    """
+    try:
+        if not html_file.exists():
+            logger.warning(f"HTML file not found: {html_file}")
+            return None
+
+        with open(html_file, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+        sections = load_sections(sections_file)
+        sections_content = parse_html_sections(html_content, sections)
+
+        return sections_content.get(section_title)
+
+    except Exception as e:
+        logger.warning(f"Error extracting section text: {e}")
+        return None
+
+
+def search(
+    query: str,
+    index: Dict[str, Any],
+    html_file: Optional[Path] = None,
+    sections_file: Optional[Path] = None,
+    sections_content: Optional[Dict[str, str]] = None,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    Выполняет поиск по индексу и возвращает ранжированные результаты.
+
+    Args:
+        query: Поисковый запрос
+        index: Словарь с индексами (section_index, content_index)
+        html_file: Опционально - путь к HTML-файлу для извлечения текста разделов
+        sections_file: Опционально - путь к файлу с заголовками разделов
+        sections_content: Опционально - уже распарсенные разделы (словарь заголовок -> текст)
+        limit: Максимальное количество результатов (по умолчанию 5)
+
+    Returns:
+        Список словарей с результатами:
+        - section_title: название раздела
+        - relevance_score: оценка релевантности
+        - matches: количество совпадений токенов
+        - text: текст раздела (если html_file предоставлен)
+    """
+    if not query or not query.strip():
+        logger.debug("Empty query provided")
+        return []
+
+    if not index:
+        logger.warning("Index is empty or None")
+        return []
+
+    section_index = index.get("section_index", {})
+    content_index = index.get("content_index", {})
+
+    if not section_index and not content_index:
+        logger.warning("Both section_index and content_index are empty")
+        return []
+
+    # Токенизируем запрос
+    query_tokens = tokenize_text(query)
+    if not query_tokens:
+        logger.debug(f"No tokens found in query: {query}")
+        return []
+
+    logger.info(f"Searching for query: '{query}' ({len(query_tokens)} tokens)")
+
+    # Словарь для подсчета релевантности разделов
+    # Ключ: название раздела, значение: (section_matches, content_matches)
+    section_scores: Dict[str, tuple[int, int]] = {}
+
+    # Поиск по индексу разделов (вес: 2)
+    for token in query_tokens:
+        if token in section_index:
+            sections = section_index[token]
+            for section_title in sections:
+                if section_title not in section_scores:
+                    section_scores[section_title] = (0, 0)
+                section_matches, content_matches = section_scores[section_title]
+                section_scores[section_title] = (section_matches + 1, content_matches)
+
+    # Поиск по индексу содержимого (вес: 1)
+    for token in query_tokens:
+        if token in content_index:
+            token_sections = content_index[token]
+            for section_title in token_sections:
+                if section_title not in section_scores:
+                    section_scores[section_title] = (0, 0)
+                section_matches, content_matches = section_scores[section_title]
+                # Подсчитываем количество вхождений токена в разделе
+                positions = token_sections[section_title]
+                section_scores[section_title] = (
+                    section_matches,
+                    content_matches + len(positions),
+                )
+
+    # Вычисляем общую релевантность и формируем результаты
+    results = []
+    for section_title, (section_matches, content_matches) in section_scores.items():
+        # Релевантность: совпадения в заголовке * 5 + совпадения в содержимом
+        # Заголовки имеют больший вес, так как они более релевантны для поиска
+        relevance_score = section_matches * 5 + content_matches
+        total_matches = section_matches + content_matches
+
+        result = {
+            "section_title": section_title,
+            "relevance_score": relevance_score,
+            "matches": total_matches,
+            "section_matches": section_matches,
+            "content_matches": content_matches,
+        }
+
+        # Извлекаем текст раздела
+        if sections_content and section_title in sections_content:
+            # Используем уже распарсенные разделы (быстрее)
+            result["text"] = sections_content[section_title]
+        elif html_file and sections_file:
+            # Парсим HTML только если не предоставлены готовые разделы
+            section_text = get_section_text(section_title, html_file, sections_file)
+            if section_text:
+                result["text"] = section_text
+
+        results.append(result)
+
+    # Сортируем по убыванию релевантности
+    results.sort(key=lambda x: x["relevance_score"], reverse=True)
+
+    # Ограничиваем количество результатов
+    limited_results = results[:limit]
+
+    logger.info(
+        f"Search completed: found {len(results)} sections, "
+        f"returning top {len(limited_results)}"
+    )
+
+    return limited_results
