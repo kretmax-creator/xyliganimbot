@@ -8,7 +8,7 @@
 import re
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Tuple
 from html.parser import HTMLParser
 from html import unescape
 
@@ -119,6 +119,35 @@ def extract_text_from_html(html_content: str) -> str:
     return text
 
 
+def extract_images_from_html_section(html_section: str) -> List[str]:
+    """
+    Извлекает пути к изображениям из HTML-фрагмента раздела.
+
+    Args:
+        html_section: HTML-фрагмент раздела
+
+    Returns:
+        Список относительных путей к изображениям (например, ["images/file1.png"])
+    """
+    images = []
+    # Ищем все теги <img> с атрибутом src
+    # Паттерн для поиска src в тегах img (поддерживает одинарные и двойные кавычки)
+    pattern = r'<img[^>]+src=["\']([^"\']+)["\']'
+    matches = re.findall(pattern, html_section, re.IGNORECASE)
+    
+    for src in matches:
+        # Обрабатываем только локальные пути, которые начинаются с "images/"
+        # Это уже обновленные пути из update_image_paths_in_html()
+        if src.startswith('images/') or src.startswith('./images/'):
+            # Нормализуем путь: убираем ./ если есть
+            normalized_path = src.replace('./', '')
+            if normalized_path not in images:
+                images.append(normalized_path)
+                logger.debug(f"Found image in section: {normalized_path}")
+    
+    return images
+
+
 def find_section_in_html(html_content: str, section_title: str) -> Optional[int]:
     """
     Находит позицию заголовка раздела в HTML.
@@ -188,18 +217,21 @@ def find_section_in_html(html_content: str, section_title: str) -> Optional[int]
     return None
 
 
-def parse_html_sections(html_content: str, sections: List[str]) -> Dict[str, str]:
+def parse_html_sections(html_content: str, sections: List[str]) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """
-    Разбивает HTML-документ на разделы по заголовкам.
+    Разбивает HTML-документ на разделы по заголовкам и извлекает изображения для каждого раздела.
 
     Args:
         html_content: HTML-контент документа
         sections: Список заголовков разделов
 
     Returns:
-        Словарь: заголовок раздела -> текст раздела
+        Кортеж (sections_content, sections_images):
+        - sections_content: словарь заголовок раздела -> текст раздела
+        - sections_images: словарь заголовок раздела -> список путей к изображениям
     """
     sections_content = {}
+    sections_images = {}
     html_lower = html_content.lower()
 
     for i, section_title in enumerate(sections):
@@ -209,6 +241,7 @@ def parse_html_sections(html_content: str, sections: List[str]) -> Dict[str, str
         if current_pos is None:
             logger.warning(f"Section '{section_title}' not found in HTML")
             sections_content[section_title] = ""
+            sections_images[section_title] = []
             continue
 
         # Находим позицию следующего раздела
@@ -217,7 +250,7 @@ def parse_html_sections(html_content: str, sections: List[str]) -> Dict[str, str
             next_section_title = sections[i + 1]
             next_pos = find_section_in_html(html_content, next_section_title)
 
-        # Извлекаем текст раздела
+        # Извлекаем HTML раздела
         if next_pos is not None and next_pos > current_pos:
             section_html = html_content[current_pos:next_pos]
         else:
@@ -227,9 +260,17 @@ def parse_html_sections(html_content: str, sections: List[str]) -> Dict[str, str
         # Извлекаем текст из HTML раздела
         section_text = extract_text_from_html(section_html)
         sections_content[section_title] = section_text
-        logger.debug(f"Extracted section '{section_title}': {len(section_text)} chars")
+        
+        # Извлекаем изображения из HTML раздела
+        section_image_paths = extract_images_from_html_section(section_html)
+        sections_images[section_title] = section_image_paths
+        
+        logger.debug(
+            f"Extracted section '{section_title}': {len(section_text)} chars, "
+            f"{len(section_image_paths)} images"
+        )
 
-    return sections_content
+    return sections_content, sections_images
 
 
 def build_search_index(sections_content: Dict[str, str]) -> Dict[str, Any]:
@@ -316,7 +357,7 @@ def build_index_from_html(
         logger.info(f"Building search index from {html_file}")
 
         # Разбиваем на разделы
-        sections_content = parse_html_sections(html_content, sections)
+        sections_content, sections_images = parse_html_sections(html_content, sections)
 
         # Строим индекс
         index = build_search_index(sections_content)
@@ -413,7 +454,7 @@ def get_section_text(
             html_content = f.read()
 
         sections = load_sections(sections_file)
-        sections_content = parse_html_sections(html_content, sections)
+        sections_content, _ = parse_html_sections(html_content, sections)
 
         return sections_content.get(section_title)
 

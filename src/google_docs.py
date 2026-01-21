@@ -437,15 +437,43 @@ def import_document(url: str, output_dir: Path) -> Dict[str, Any]:
             'images': image_paths
         }
 
-        # Строим поисковый индекс
+        # Строим поисковый индекс и извлекаем связь изображений с разделами
         if html_file:
             try:
-                from src.search import build_index_from_html, save_index_to_cache
+                from src.search import (
+                    load_sections,
+                    parse_html_sections,
+                    build_search_index,
+                )
 
                 sections_file = output_dir / "sections.json"
                 if sections_file.exists():
-                    logger.info("Building search index...")
-                    index = build_index_from_html(html_file, sections_file)
+                    logger.info("Building search index and extracting section images...")
+                    
+                    # Загружаем заголовки разделов
+                    sections = load_sections(sections_file)
+                    
+                    # Загружаем HTML-контент
+                    with open(html_file, "r", encoding="utf-8") as f:
+                        html_content = f.read()
+                    
+                    # Разбиваем на разделы и извлекаем изображения
+                    sections_content, sections_images = parse_html_sections(html_content, sections)
+                    
+                    # Сохраняем связь изображений с разделами в кэш
+                    # Преобразуем Path объекты в строки для JSON-сериализации
+                    section_images_serializable = {
+                        section_title: image_paths
+                        for section_title, image_paths in sections_images.items()
+                    }
+                    cache_data['section_images'] = section_images_serializable
+                    logger.info(
+                        f"Extracted images for {len(sections_images)} sections, "
+                        f"total {sum(len(imgs) for imgs in sections_images.values())} images"
+                    )
+                    
+                    # Строим поисковый индекс
+                    index = build_search_index(sections_content)
                     if index:
                         cache_data['search_index'] = index
                         logger.info("Search index built successfully")
