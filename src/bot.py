@@ -189,13 +189,50 @@ def main() -> None:
         html_file = project_root / "data" / "knowledge.html"
         sections_file = project_root / "data" / "sections.json"
         images_dir = project_root / "data" / "images"
+        models_dir = project_root / "models"
+
+        # Проверки наличия необходимых данных (без автозагрузки)
+        logger.info("Checking required data availability...")
+        
+        # Проверка наличия документа
+        if not html_file.exists():
+            logger.warning(f"HTML file not found: {html_file}")
+        else:
+            logger.info(f"HTML file found: {html_file}")
+        
+        # Проверка наличия файла с разделами
+        if not sections_file.exists():
+            logger.warning(f"Sections file not found: {sections_file}")
+        else:
+            logger.info(f"Sections file found: {sections_file}")
+        
+        # Проверка наличия embedding-модели (для семантического поиска)
+        model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+        model_path = models_dir / model_name
+        if model_path.exists():
+            logger.info(f"Embedding model found: {model_path}")
+        else:
+            logger.warning(
+                f"Embedding model not found: {model_path}. "
+                f"Semantic search will not be available. Use /admin load_model to download it."
+            )
 
         # Сначала пытаемся загрузить embeddings для семантического поиска
         embeddings_data = load_embeddings_from_cache(cache_file)
         if embeddings_data:
             logger.info("Embeddings loaded successfully for semantic search")
-            # Используем embeddings_data как индекс (для совместимости с текущей функцией search)
-            # В будущем можно будет использовать embeddings напрямую для семантического поиска
+            # Проверяем наличие модели для семантического поиска
+            from src.search import load_embedding_model
+            model = load_embedding_model()
+            if model is None:
+                logger.warning(
+                    "Embeddings found but model not available. "
+                    "Semantic search will not work. Falling back to token-based search."
+                )
+                embeddings_data = None  # Переключаемся на token-based поиск
+        
+        if embeddings_data:
+            # Используем embeddings для семантического поиска
             init_search_context(
                 index=embeddings_data,
                 html_file=html_file,
@@ -217,7 +254,8 @@ def main() -> None:
             else:
                 logger.warning(
                     "Neither embeddings nor search index found in cache. "
-                    "Bot will work, but search functionality will be limited."
+                    "Bot will work, but search functionality will be limited. "
+                    "Use /admin vectorize to create embeddings or /admin import_content to create index."
                 )
                 # Инициализируем с пустым индексом, чтобы бот мог работать
                 init_search_context(

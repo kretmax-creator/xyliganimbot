@@ -83,7 +83,13 @@ def format_search_results(results: List[Dict[str, Any]], max_text_length: int = 
     for i, result in enumerate(results, 1):
         section_title = result.get("section_title", "Без названия")
         text = result.get("text", "")
-        relevance_score = result.get("relevance_score", 0)
+        # Используем score (для semantic search) или relevance_score (для token-based)
+        score = result.get("score", result.get("relevance_score", 0))
+        
+        # Если score < 0.3, добавляем предупреждение о низкой уверенности
+        confidence_warning = ""
+        if isinstance(score, float) and score < 0.3:
+            confidence_warning = " ⚠️ (низкая уверенность)"
 
         # Обрезаем текст, если он слишком длинный
         if text and len(text) > max_text_length:
@@ -91,7 +97,15 @@ def format_search_results(results: List[Dict[str, Any]], max_text_length: int = 
 
         # Экранируем заголовок и текст для безопасного Markdown
         escaped_title = escape_markdown(section_title)
-        message_parts.append(f"\n📌 *{escaped_title}*")
+        
+        # Форматируем score для отображения
+        if isinstance(score, float):
+            score_text = f" (релевантность: {score:.1%})"
+        else:
+            score_text = f" (релевантность: {score})"
+        
+        message_parts.append(f"\n📌 *{escaped_title}*{score_text}{confidence_warning}")
+        
         if text:
             # Экранируем текст, чтобы избежать ошибок парсинга Markdown
             escaped_text = escape_markdown(text)
@@ -224,6 +238,33 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"query='{query[:50]}...'"
     )
 
+    # Проверяем наличие необходимых данных
+    from pathlib import Path
+    
+    # Проверка наличия документа
+    if not html_file_path or not html_file_path.exists():
+        logger.warning("HTML file not found")
+        try:
+            await message.reply_text(
+                "Документ базы знаний не найден. "
+                "Обратитесь к администратору для загрузки контента."
+            )
+        except Exception as e:
+            logger.error(f"Error sending error message: {e}")
+        return
+    
+    # Проверка наличия файла с разделами
+    if not sections_file_path or not sections_file_path.exists():
+        logger.warning("Sections file not found")
+        try:
+            await message.reply_text(
+                "Файл с разделами не найден. "
+                "Обратитесь к администратору."
+            )
+        except Exception as e:
+            logger.error(f"Error sending error message: {e}")
+        return
+    
     # Проверяем, инициализирован ли поисковый индекс
     if not search_index:
         logger.error("Search index not initialized")
@@ -235,6 +276,25 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             logger.error(f"Error sending error message: {e}")
         return
+    
+    # Проверка наличия embeddings для семантического поиска
+    has_embeddings = isinstance(search_index, dict) and "embeddings" in search_index
+    if has_embeddings:
+        # Проверяем наличие модели для семантического поиска
+        from src.search import load_embedding_model
+        model = load_embedding_model()
+        if model is None:
+            logger.warning("Embedding model not available, falling back to token-based search")
+            # Можно продолжить с token-based поиском, если есть token-based индекс
+            if "section_index" not in search_index and "content_index" not in search_index:
+                try:
+                    await message.reply_text(
+                        "Модель для семантического поиска не найдена. "
+                        "Обратитесь к администратору для загрузки модели."
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending error message: {e}")
+                return
 
     # Выполняем поиск
     try:
@@ -246,7 +306,16 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
             limit=5,
         )
 
-        logger.info(f"Search completed: {len(results)} results found")
+        # Логируем результаты с score
+        if results:
+            scores = [r.get("score", r.get("relevance_score", 0)) for r in results]
+            scores_str = ", ".join([f"{s:.3f}" if isinstance(s, float) else str(s) for s in scores[:3]])
+            logger.info(
+                f"Search completed: {len(results)} results found "
+                f"(scores: [{scores_str}])"
+            )
+        else:
+            logger.info("Search completed: no results found")
 
         # Отправляем результаты
         await send_search_response(update, results)

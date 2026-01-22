@@ -12,12 +12,13 @@ from typing import Dict, List, Optional, Any, Set, Tuple
 from html.parser import HTMLParser
 from html import unescape
 try:
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import SentenceTransformer, util
     import numpy as np
     EMBEDDINGS_AVAILABLE = True
 except ImportError:
     EMBEDDINGS_AVAILABLE = False
     SentenceTransformer = None
+    util = None
     np = None
 
 
@@ -786,6 +787,185 @@ def get_section_text(
         return None
 
 
+def get_text_snippet(text: str, max_length: int = 300) -> str:
+    """
+    Возвращает snippet текста или полный текст для небольших разделов.
+
+    Args:
+        text: Текст раздела
+        max_length: Максимальная длина snippet (по умолчанию 300 символов)
+
+    Returns:
+        Snippet или полный текст, если раздел небольшой (< 500 символов)
+    """
+    if not text:
+        return ""
+    
+    # Если раздел небольшой (< 500 символов), возвращаем полный текст
+    if len(text) < 500:
+        return text
+    
+    # Для больших разделов возвращаем snippet
+    if len(text) > max_length:
+        # Пытаемся обрезать по границе слова
+        snippet = text[:max_length]
+        last_space = snippet.rfind(' ')
+        if last_space > max_length * 0.8:  # Если пробел не слишком далеко от конца
+            snippet = snippet[:last_space]
+        return snippet + "..."
+    
+    return text
+
+
+def semantic_search(
+    query: str,
+    embeddings_data: Dict[str, Any],
+    model: Optional[SentenceTransformer] = None,
+    limit: int = 5,
+    min_score: float = 0.3
+) -> List[Dict[str, Any]]:
+    """
+    Выполняет семантический поиск через косинусное сходство векторов.
+
+    Args:
+        query: Поисковый запрос
+        embeddings_data: Словарь с embeddings данными:
+            - embeddings: список списков (векторы разделов)
+            - section_titles: список заголовков разделов
+            - sections_content: словарь заголовок -> текст
+        model: Embedding-модель (если None, загружается)
+        limit: Максимальное количество результатов
+        min_score: Минимальный score для включения результата (0-1)
+
+    Returns:
+        Список словарей с результатами:
+        - section_title: название раздела
+        - score: косинусное сходство (0-1)
+        - text: текст раздела (snippet или полный)
+    """
+    if not EMBEDDINGS_AVAILABLE or util is None:
+        logger.error("sentence-transformers not available for semantic search")
+        return []
+    
+    if not query or not query.strip():
+        logger.debug("Empty query provided for semantic search")
+        return []
+    
+    try:
+        # Загружаем модель, если не предоставлена
+        if model is None:
+            model = load_embedding_model()
+            if model is None:
+                logger.error("Failed to load embedding model for semantic search")
+                return []
+        
+        # Получаем данные из embeddings_data
+        embeddings_list = embeddings_data.get("embeddings", [])
+        section_titles = embeddings_data.get("section_titles", [])
+        sections_content = embeddings_data.get("sections_content", {})
+        
+        # Проверяем наличие данных
+        # embeddings_list может быть списком или numpy array
+        if embeddings_list is None:
+            logger.warning("Embeddings is None")
+            return []
+        
+        try:
+            embeddings_len = len(embeddings_list)
+            if embeddings_len == 0:
+                logger.warning("Empty embeddings")
+                return []
+        except (TypeError, ValueError):
+            logger.warning("Cannot determine embeddings length")
+            return []
+        
+        if not section_titles or len(section_titles) == 0:
+            logger.warning("Empty section titles")
+            return []
+        
+        # Преобразуем список списков в numpy array (если еще не массив)
+        if np is not None:
+            if isinstance(embeddings_list, np.ndarray):
+                embeddings_array = embeddings_list
+            else:
+                embeddings_array = np.array(embeddings_list)
+            # Приводим к float32 для совместимости с PyTorch
+            if embeddings_array.dtype != np.float32:
+                embeddings_array = embeddings_array.astype(np.float32)
+        else:
+            embeddings_array = embeddings_list
+        
+        # Векторизуем запрос
+        logger.info(f"Vectorizing query: '{query[:50]}...'")
+        query_embedding = model.encode(query, show_progress_bar=False)
+        
+        # Приводим query_embedding к numpy array и float32, если нужно
+        if np is not None:
+            if not isinstance(query_embedding, np.ndarray):
+                query_embedding = np.array(query_embedding)
+            if query_embedding.dtype != np.float32:
+                query_embedding = query_embedding.astype(np.float32)
+        
+        # Выполняем семантический поиск через util.semantic_search()
+        # Возвращает список списков: [[{corpus_id, score}, ...], ...]
+        # Для одного запроса возвращается [[{corpus_id, score}, ...]]
+        hits = util.semantic_search(
+            query_embedding,
+            embeddings_array,
+            top_k=limit * 2  # Берем больше, чтобы отфильтровать по min_score
+        )
+        
+        if not hits or len(hits) == 0 or not hits[0]:
+            logger.info("No results found in semantic search")
+            return []
+        
+        # Формируем результаты
+        # hits[0] содержит результаты для первого (и единственного) запроса
+        results = []
+        for hit in hits[0]:
+            idx = hit['corpus_id']
+            score = float(hit['score'])
+            
+            # Фильтруем по минимальному score
+            if score < min_score:
+                continue
+            
+            # Получаем заголовок раздела
+            if idx >= len(section_titles):
+                logger.warning(f"Index {idx} out of range for section_titles")
+                continue
+            
+            section_title = section_titles[idx]
+            
+            # Получаем текст раздела
+            section_text = sections_content.get(section_title, "")
+            
+            # Формируем snippet или полный текст
+            text = get_text_snippet(section_text)
+            
+            results.append({
+                "section_title": section_title,
+                "score": score,
+                "text": text,
+            })
+            
+            # Ограничиваем количество результатов
+            if len(results) >= limit:
+                break
+        
+        scores_str = ", ".join([f"{r['score']:.3f}" for r in results[:3]])
+        logger.info(
+            f"Semantic search completed: {len(results)} results "
+            f"(scores: [{scores_str}])"
+        )
+        
+        return results
+    
+    except Exception as e:
+        logger.error(f"Error in semantic search: {e}", exc_info=True)
+        return []
+
+
 def search(
     query: str,
     index: Dict[str, Any],
@@ -796,10 +976,14 @@ def search(
 ) -> List[Dict[str, Any]]:
     """
     Выполняет поиск по индексу и возвращает ранжированные результаты.
+    
+    Поддерживает два типа поиска:
+    1. Семантический поиск (если index содержит embeddings)
+    2. Token-based поиск (если index содержит section_index/content_index)
 
     Args:
         query: Поисковый запрос
-        index: Словарь с индексами (section_index, content_index)
+        index: Словарь с индексами или embeddings данными
         html_file: Опционально - путь к HTML-файлу для извлечения текста разделов
         sections_file: Опционально - путь к файлу с заголовками разделов
         sections_content: Опционально - уже распарсенные разделы (словарь заголовок -> текст)
@@ -808,9 +992,8 @@ def search(
     Returns:
         Список словарей с результатами:
         - section_title: название раздела
-        - relevance_score: оценка релевантности
-        - matches: количество совпадений токенов
-        - text: текст раздела (если html_file предоставлен)
+        - score: оценка релевантности (0-1 для semantic, relevance_score для token-based)
+        - text: текст раздела (snippet или полный)
     """
     if not query or not query.strip():
         logger.debug("Empty query provided")
@@ -820,6 +1003,27 @@ def search(
         logger.warning("Index is empty or None")
         return []
 
+    # Определяем тип индекса: embeddings или token-based
+    has_embeddings = "embeddings" in index and "section_titles" in index
+    has_token_index = "section_index" in index or "content_index" in index
+
+    # Если есть embeddings, используем семантический поиск
+    if has_embeddings:
+        logger.info("Using semantic search (embeddings found)")
+        results = semantic_search(
+            query=query,
+            embeddings_data=index,
+            limit=limit,
+            min_score=0.3
+        )
+        return results
+
+    # Иначе используем token-based поиск
+    if not has_token_index:
+        logger.warning("Index type not recognized (neither embeddings nor token-based)")
+        return []
+
+    logger.info("Using token-based search")
     section_index = index.get("section_index", {})
     content_index = index.get("content_index", {})
 
@@ -872,23 +1076,30 @@ def search(
         relevance_score = section_matches * 5 + content_matches
         total_matches = section_matches + content_matches
 
-        result = {
-            "section_title": section_title,
-            "relevance_score": relevance_score,
-            "matches": total_matches,
-            "section_matches": section_matches,
-            "content_matches": content_matches,
-        }
-
         # Извлекаем текст раздела
+        section_text = None
         if sections_content and section_title in sections_content:
             # Используем уже распарсенные разделы (быстрее)
-            result["text"] = sections_content[section_title]
+            section_text = sections_content[section_title]
         elif html_file and sections_file:
             # Парсим HTML только если не предоставлены готовые разделы
             section_text = get_section_text(section_title, html_file, sections_file)
-            if section_text:
-                result["text"] = section_text
+
+        # Формируем snippet или полный текст
+        text = get_text_snippet(section_text) if section_text else ""
+
+        # Нормализуем score для совместимости с semantic search (0-1)
+        # Используем простую нормализацию: делим на максимально возможный score
+        # Максимальный score = количество токенов в запросе * 5 (все в заголовках)
+        max_possible_score = len(query_tokens) * 5 if query_tokens else 1
+        normalized_score = min(relevance_score / max_possible_score, 1.0) if max_possible_score > 0 else 0.0
+
+        result = {
+            "section_title": section_title,
+            "score": normalized_score,  # Используем score для совместимости
+            "relevance_score": relevance_score,  # Сохраняем для обратной совместимости
+            "text": text,
+        }
 
         results.append(result)
 
@@ -898,9 +1109,11 @@ def search(
     # Ограничиваем количество результатов
     limited_results = results[:limit]
 
+    scores_str = ", ".join([f"{r['score']:.3f}" for r in limited_results[:3]])
     logger.info(
-        f"Search completed: found {len(results)} sections, "
-        f"returning top {len(limited_results)}"
+        f"Token-based search completed: found {len(results)} sections, "
+        f"returning top {len(limited_results)} "
+        f"(scores: [{scores_str}])"
     )
 
     return limited_results
