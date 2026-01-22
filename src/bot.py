@@ -26,7 +26,7 @@ from src.config import (
     get_logging_config,
 )
 from src.logging import setup_logging, get_logger, get_audit_logger
-from src.search import load_index_from_cache
+from src.search import load_index_from_cache, load_embeddings_from_cache
 from src.handlers import handle_help_command, handle_search_query, init_search_context
 
 # Логгеры будут инициализированы после setup_logging()
@@ -183,34 +183,49 @@ def main() -> None:
             f"{len(whitelists.get('admins', []))} admins"
         )
 
-        # Загрузка поискового индекса
+        # Загрузка embeddings или поискового индекса
         project_root = Path(__file__).parent.parent
         cache_file = project_root / "data" / "knowledge_cache.json"
         html_file = project_root / "data" / "knowledge.html"
         sections_file = project_root / "data" / "sections.json"
         images_dir = project_root / "data" / "images"
 
-        search_index_data = load_index_from_cache(cache_file)
-        if search_index_data:
-            logger.info("Search index loaded successfully")
+        # Сначала пытаемся загрузить embeddings для семантического поиска
+        embeddings_data = load_embeddings_from_cache(cache_file)
+        if embeddings_data:
+            logger.info("Embeddings loaded successfully for semantic search")
+            # Используем embeddings_data как индекс (для совместимости с текущей функцией search)
+            # В будущем можно будет использовать embeddings напрямую для семантического поиска
             init_search_context(
-                index=search_index_data,
+                index=embeddings_data,
                 html_file=html_file,
                 sections_file=sections_file,
                 images_dir=images_dir,
             )
         else:
-            logger.warning(
-                "Search index not found in cache. "
-                "Bot will work, but search functionality will be limited."
-            )
-            # Инициализируем с пустым индексом, чтобы бот мог работать
-            init_search_context(
-                index={"section_index": {}, "content_index": {}},
-                html_file=html_file,
-                sections_file=sections_file,
-                images_dir=images_dir,
-            )
+            # Если embeddings нет, загружаем обычный token-based индекс
+            logger.info("Embeddings not found, trying to load token-based search index...")
+            search_index_data = load_index_from_cache(cache_file)
+            if search_index_data:
+                logger.info("Token-based search index loaded successfully")
+                init_search_context(
+                    index=search_index_data,
+                    html_file=html_file,
+                    sections_file=sections_file,
+                    images_dir=images_dir,
+                )
+            else:
+                logger.warning(
+                    "Neither embeddings nor search index found in cache. "
+                    "Bot will work, but search functionality will be limited."
+                )
+                # Инициализируем с пустым индексом, чтобы бот мог работать
+                init_search_context(
+                    index={"section_index": {}, "content_index": {}},
+                    html_file=html_file,
+                    sections_file=sections_file,
+                    images_dir=images_dir,
+                )
 
     except FileNotFoundError as e:
         print(f"Error: {e}")

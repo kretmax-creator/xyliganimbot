@@ -320,24 +320,70 @@ def update_image_paths_in_html(html_file: Path, images_dir: Path) -> None:
 
         # Получаем список всех изображений в папке
         image_files = list(images_dir.glob('*'))
-        image_names = {img.name.lower(): img.name for img in image_files}
+        # Создаем словарь: базовое имя (image1.png) -> реальное имя файла (image1_1.png)
+        # и полное имя -> реальное имя файла
+        image_names = {}
+        image_base_names = {}
+        for img in image_files:
+            name_lower = img.name.lower()
+            # Добавляем полное имя для прямого совпадения
+            image_names[name_lower] = img.name
+            
+            # Извлекаем базовое имя: image1_1.png -> image1.png, image2_2.png -> image2.png
+            # Убираем суффикс _N перед расширением
+            base_name_match = re.match(r'^(.+?)(_\d+)?\.(png|jpg|jpeg|gif|webp)$', name_lower, re.IGNORECASE)
+            if base_name_match:
+                base_name = f"{base_name_match.group(1)}.{base_name_match.group(3)}"
+                image_base_names[base_name] = img.name
 
         # Обновляем ссылки на изображения
         # Ищем все теги img с src
         def replace_image_src(match):
             src = match.group(1)
-            # Если это уже локальный путь, пропускаем
+            # Если это уже локальный путь, проверяем существование файла
             if src.startswith('images/') or src.startswith('./images/'):
+                # Убираем префикс images/ или ./images/
+                img_name = src.replace('./images/', '').replace('images/', '')
+                img_name_lower = img_name.lower()
+                
+                # Если файл существует с таким именем, оставляем как есть
+                if img_name_lower in image_names:
+                    return match.group(0)
+                
+                # Пытаемся найти по базовому имени
+                if img_name_lower in image_base_names:
+                    return f'src="images/{image_base_names[img_name_lower]}"'
+                
+                # Если не нашли, оставляем как есть (может быть внешняя ссылка)
+                logger.debug(f"Image not found in images_dir: {img_name}")
                 return match.group(0)
 
-            # Пытаемся найти изображение по имени файла
+            # Обрабатываем file:// пути (file:///C:/path/to/image.png)
+            if src.startswith('file://'):
+                # Убираем file:// префикс
+                src = src.replace('file:///', '').replace('file://', '')
+                # Нормализуем путь (убираем лишние слеши)
+                src = src.replace('\\', '/')
+                # Извлекаем имя файла из пути
+                src = Path(src).name
+
+            # Извлекаем имя файла из любого пути
             src_lower = Path(src).name.lower()
+            
+            # Пытаемся найти изображение по полному имени
             if src_lower in image_names:
                 return f'src="images/{image_names[src_lower]}"'
+            
+            # Пытаемся найти по базовому имени
+            if src_lower in image_base_names:
+                return f'src="images/{image_base_names[src_lower]}"'
+            
+            # Логируем, если не нашли
+            logger.debug(f"Image not found in images_dir: {src} (searched as {src_lower})")
             return match.group(0)
 
-        # Паттерн для поиска src в тегах img
-        pattern = r'src="([^"]+)"'
+        # Паттерн для поиска src в тегах img (поддерживает одинарные и двойные кавычки)
+        pattern = r'src=["\']([^"\']+)["\']'
         html_content = re.sub(pattern, replace_image_src, html_content, flags=re.IGNORECASE)
 
         # Сохраняем обновленный HTML
@@ -437,52 +483,68 @@ def import_document(url: str, output_dir: Path) -> Dict[str, Any]:
             'images': image_paths
         }
 
-        # Строим поисковый индекс и извлекаем связь изображений с разделами
+        # Строим embeddings и извлекаем связь изображений с разделами
         if html_file:
             try:
                 from src.search import (
-                    load_sections,
-                    parse_html_sections,
+                    build_embeddings_from_html,
+                    save_embeddings_to_cache,
                     build_search_index,
                 )
 
                 sections_file = output_dir / "sections.json"
                 if sections_file.exists():
-                    logger.info("Building search index and extracting section images...")
+                    logger.info("Building embeddings and extracting section images...")
                     
-                    # Загружаем заголовки разделов
-                    sections = load_sections(sections_file)
+                    # Пытаемся построить embeddings для семантического поиска
+                    embeddings_data = build_embeddings_from_html(html_file, sections_file)
                     
-                    # Загружаем HTML-контент
-                    with open(html_file, "r", encoding="utf-8") as f:
-                        html_content = f.read()
-                    
-                    # Разбиваем на разделы и извлекаем изображения
-                    sections_content, sections_images = parse_html_sections(html_content, sections)
-                    
-                    # Сохраняем связь изображений с разделами в кэш
-                    # Преобразуем Path объекты в строки для JSON-сериализации
-                    section_images_serializable = {
-                        section_title: image_paths
-                        for section_title, image_paths in sections_images.items()
-                    }
-                    cache_data['section_images'] = section_images_serializable
-                    logger.info(
-                        f"Extracted images for {len(sections_images)} sections, "
-                        f"total {sum(len(imgs) for imgs in sections_images.values())} images"
-                    )
-                    
-                    # Строим поисковый индекс
-                    index = build_search_index(sections_content)
-                    if index:
-                        cache_data['search_index'] = index
-                        logger.info("Search index built successfully")
+                    if embeddings_data:
+                        # Сохраняем embeddings в кэш
+                        save_embeddings_to_cache(cache_file, embeddings_data)
+                        
+                        # Извлекаем sections_images из embeddings_data
+                        sections_images = embeddings_data.get('sections_images', {})
+                        
+                        # Сохраняем связь изображений с разделами в кэш
+                        section_images_serializable = {
+                            section_title: image_paths
+                            for section_title, image_paths in sections_images.items()
+                        }
+                        cache_data['section_images'] = section_images_serializable
+                        logger.info(
+                            f"Extracted images for {len(sections_images)} sections, "
+                            f"total {sum(len(imgs) for imgs in sections_images.values())} images"
+                        )
+                        logger.info("Embeddings built and saved successfully")
                     else:
-                        logger.warning("Failed to build search index")
+                        # Если embeddings не удалось построить, строим обычный индекс
+                        logger.warning("Failed to build embeddings. Falling back to token-based search index.")
+                        from src.search import (
+                            load_sections,
+                            parse_html_sections,
+                        )
+                        
+                        sections = load_sections(sections_file)
+                        with open(html_file, "r", encoding="utf-8") as f:
+                            html_content = f.read()
+                        
+                        sections_content, sections_images = parse_html_sections(html_content, sections)
+                        
+                        section_images_serializable = {
+                            section_title: image_paths
+                            for section_title, image_paths in sections_images.items()
+                        }
+                        cache_data['section_images'] = section_images_serializable
+                        
+                        index = build_search_index(sections_content)
+                        if index:
+                            cache_data['search_index'] = index
+                            logger.info("Token-based search index built successfully")
                 else:
-                    logger.warning(f"Sections file not found: {sections_file}, skipping index build")
+                    logger.warning(f"Sections file not found: {sections_file}, skipping embeddings build")
             except Exception as e:
-                logger.error(f"Error building search index: {e}", exc_info=True)
+                logger.error(f"Error building embeddings: {e}", exc_info=True)
 
         save_cache(cache_file, cache_data)
 

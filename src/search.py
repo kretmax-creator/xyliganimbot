@@ -11,10 +11,22 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Set, Tuple
 from html.parser import HTMLParser
 from html import unescape
+try:
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+    EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    EMBEDDINGS_AVAILABLE = False
+    SentenceTransformer = None
+    np = None
+
 
 from src.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Глобальная переменная для кэширования embedding-модели
+_embedding_model: Optional[SentenceTransformer] = None
 
 
 class HTMLTextExtractor(HTMLParser):
@@ -271,6 +283,236 @@ def parse_html_sections(html_content: str, sections: List[str]) -> Tuple[Dict[st
         )
 
     return sections_content, sections_images
+
+
+def load_embedding_model(model_name: str = "paraphrase-multilingual-MiniLM-L12-v2") -> Optional[SentenceTransformer]:
+    """
+    Загружает embedding-модель из локальной папки models/ или из HuggingFace.
+    
+    Args:
+        model_name: Имя модели (по умолчанию paraphrase-multilingual-MiniLM-L12-v2)
+    
+    Returns:
+        Загруженная модель или None при ошибке
+    """
+    global _embedding_model
+    
+    if not EMBEDDINGS_AVAILABLE:
+        logger.error("sentence-transformers not available. Install with: pip install sentence-transformers")
+        return None
+    
+    if _embedding_model is not None:
+        return _embedding_model
+    
+    try:
+        # Сначала пробуем загрузить из локальной папки models/
+        models_dir = Path("models") / model_name
+        if models_dir.exists():
+            logger.info(f"Loading embedding model from local path: {models_dir}")
+            _embedding_model = SentenceTransformer(str(models_dir))
+        else:
+            # Если нет локально, загружаем из HuggingFace
+            logger.info(f"Loading embedding model from HuggingFace: {model_name}")
+            _embedding_model = SentenceTransformer(model_name)
+        
+        logger.info(f"Embedding model loaded successfully: {model_name}")
+        return _embedding_model
+    
+    except Exception as e:
+        logger.error(f"Error loading embedding model: {e}", exc_info=True)
+        return None
+
+
+def vectorize_sections(
+    sections_content: Dict[str, str]
+) -> Optional[Tuple[Any, List[str]]]:
+    """
+    Векторизует разделы документа через embedding-модель.
+    
+    Args:
+        sections_content: Словарь заголовок раздела -> текст раздела
+    
+    Returns:
+        Кортеж (embeddings_array, section_titles_list) или None при ошибке
+        embeddings_array: numpy array с векторами разделов
+        section_titles_list: список заголовков разделов в том же порядке
+    """
+    if not EMBEDDINGS_AVAILABLE:
+        logger.error("Embeddings not available. Cannot vectorize sections.")
+        return None
+    
+    model = load_embedding_model()
+    if model is None:
+        logger.error("Failed to load embedding model. Cannot vectorize sections.")
+        return None
+    
+    try:
+        # Формируем тексты для векторизации: "Заголовок. Текст раздела"
+        texts_to_encode = []
+        section_titles = []
+        
+        for section_title, section_text in sections_content.items():
+            # Комбинируем заголовок и текст для лучшего понимания контекста
+            combined_text = f"{section_title}. {section_text}".strip()
+            texts_to_encode.append(combined_text)
+            section_titles.append(section_title)
+        
+        if not texts_to_encode:
+            logger.warning("No sections to vectorize")
+            return None
+        
+        logger.info(f"Vectorizing {len(texts_to_encode)} sections...")
+        
+        # Векторизуем все разделы одним батчем
+        embeddings = model.encode(texts_to_encode, show_progress_bar=False)
+        
+        # Преобразуем в numpy array, если еще не массив
+        if np is not None:
+            embeddings_array = np.array(embeddings)
+        else:
+            embeddings_array = embeddings
+        
+        logger.info(
+            f"Vectorization completed: {len(section_titles)} sections, "
+            f"embedding dimension: {embeddings_array.shape[1]}"
+        )
+        
+        return embeddings_array, section_titles
+    
+    except Exception as e:
+        logger.error(f"Error vectorizing sections: {e}", exc_info=True)
+        return None
+
+
+def build_embeddings_from_html(
+    html_file: Path, sections_file: Path
+) -> Optional[Dict[str, Any]]:
+    """
+    Строит embeddings из HTML-файла и заголовков разделов.
+    Заменяет build_index_from_html для семантического поиска.
+    
+    Args:
+        html_file: Путь к HTML-файлу
+        sections_file: Путь к файлу с заголовками разделов
+    
+    Returns:
+        Словарь с embeddings данными или None при ошибке:
+        - embeddings: список списков (для JSON-сериализации)
+        - section_titles: список заголовков разделов
+        - sections_content: словарь заголовок -> текст
+        - sections_images: словарь заголовок -> список путей к изображениям
+    """
+    try:
+        # Загружаем заголовки разделов
+        sections = load_sections(sections_file)
+        
+        # Загружаем HTML-контент
+        if not html_file.exists():
+            logger.error(f"HTML file not found: {html_file}")
+            return None
+        
+        with open(html_file, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        
+        logger.info(f"Building embeddings from {html_file}")
+        
+        # Разбиваем на разделы
+        sections_content, sections_images = parse_html_sections(html_content, sections)
+        
+        # Векторизуем разделы
+        vectorization_result = vectorize_sections(sections_content)
+        
+        if vectorization_result is None:
+            logger.error("Failed to vectorize sections. Falling back to token-based search.")
+            return None
+        
+        embeddings_array, section_titles = vectorization_result
+        
+        # Преобразуем numpy array в список списков для JSON-сериализации
+        embeddings_list = embeddings_array.tolist()
+        
+        return {
+            "embeddings": embeddings_list,
+            "section_titles": section_titles,
+            "sections_content": sections_content,
+            "sections_images": sections_images,
+        }
+    
+    except FileNotFoundError as e:
+        logger.error(f"Error building embeddings: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error building embeddings: {e}", exc_info=True)
+        return None
+
+
+def save_embeddings_to_cache(cache_file: Path, embeddings_data: Dict[str, Any]) -> None:
+    """
+    Сохраняет embeddings в кэш.
+    
+    Args:
+        cache_file: Путь к файлу кэша
+        embeddings_data: Словарь с embeddings данными
+    """
+    try:
+        # Загружаем существующий кэш
+        cache_data = {}
+        if cache_file.exists():
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cache_data = json.load(f)
+        
+        # Добавляем embeddings в кэш
+        cache_data["embeddings"] = embeddings_data
+        
+        # Сохраняем обновленный кэш
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"Embeddings saved to cache: {cache_file}")
+    
+    except Exception as e:
+        logger.error(f"Error saving embeddings to cache: {e}", exc_info=True)
+
+
+def load_embeddings_from_cache(cache_file: Path) -> Optional[Dict[str, Any]]:
+    """
+    Загружает embeddings из кэша.
+    
+    Args:
+        cache_file: Путь к файлу кэша
+    
+    Returns:
+        Словарь с embeddings данными или None, если не найден
+        embeddings_data содержит:
+        - embeddings: список списков (конвертируется обратно в numpy array)
+        - section_titles: список заголовков разделов
+        - sections_content: словарь заголовок -> текст
+        - sections_images: словарь заголовок -> список путей к изображениям
+    """
+    try:
+        if not cache_file.exists():
+            logger.debug(f"Cache file not found: {cache_file}")
+            return None
+        
+        with open(cache_file, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+        
+        embeddings_data = cache_data.get("embeddings")
+        if embeddings_data:
+            # Конвертируем список списков обратно в numpy array
+            if np is not None and "embeddings" in embeddings_data:
+                embeddings_list = embeddings_data["embeddings"]
+                embeddings_data["embeddings"] = np.array(embeddings_list)
+            
+            logger.info(f"Embeddings loaded from cache: {cache_file}")
+            return embeddings_data
+        else:
+            logger.debug("No embeddings found in cache")
+            return None
+    
+    except Exception as e:
+        logger.warning(f"Error loading embeddings from cache: {e}")
+        return None
 
 
 def build_search_index(sections_content: Dict[str, str]) -> Dict[str, Any]:
