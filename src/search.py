@@ -287,13 +287,16 @@ def parse_html_sections(html_content: str, sections: List[str]) -> Tuple[Dict[st
 
 def load_embedding_model(model_name: str = "paraphrase-multilingual-MiniLM-L12-v2") -> Optional[SentenceTransformer]:
     """
-    Загружает embedding-модель из локальной папки models/ или из HuggingFace.
+    Загружает embedding-модель ТОЛЬКО из локальной папки models/.
+    
+    Модель должна быть загружена заранее через модуль model_loader или команду /admin load_model.
+    Автозагрузка из HuggingFace не выполняется.
     
     Args:
         model_name: Имя модели (по умолчанию paraphrase-multilingual-MiniLM-L12-v2)
     
     Returns:
-        Загруженная модель или None при ошибке
+        Загруженная модель или None, если не найдена локально
     """
     global _embedding_model
     
@@ -305,18 +308,19 @@ def load_embedding_model(model_name: str = "paraphrase-multilingual-MiniLM-L12-v
         return _embedding_model
     
     try:
-        # Сначала пробуем загрузить из локальной папки models/
+        # ТОЛЬКО локальная загрузка из папки models/
         models_dir = Path("models") / model_name
         if models_dir.exists():
             logger.info(f"Loading embedding model from local path: {models_dir}")
             _embedding_model = SentenceTransformer(str(models_dir))
+            logger.info(f"Embedding model loaded successfully: {model_name}")
+            return _embedding_model
         else:
-            # Если нет локально, загружаем из HuggingFace
-            logger.info(f"Loading embedding model from HuggingFace: {model_name}")
-            _embedding_model = SentenceTransformer(model_name)
-        
-        logger.info(f"Embedding model loaded successfully: {model_name}")
-        return _embedding_model
+            logger.error(
+                f"Model not found locally: {models_dir}. "
+                f"Use /admin load_model or src.model_loader.download_model() to download it first."
+            )
+            return None
     
     except Exception as e:
         logger.error(f"Error loading embedding model: {e}", exc_info=True)
@@ -472,6 +476,83 @@ def save_embeddings_to_cache(cache_file: Path, embeddings_data: Dict[str, Any]) 
     
     except Exception as e:
         logger.error(f"Error saving embeddings to cache: {e}", exc_info=True)
+
+
+def vectorize_content(
+    html_file: Path,
+    sections_file: Path,
+    cache_file: Path,
+    model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
+) -> bool:
+    """
+    Векторизует загруженный контент и сохраняет embeddings в кэш.
+    
+    Это независимый процесс, который работает с локальными файлами.
+    Требует наличия модели в папке models/ (загруженной через model_loader).
+    
+    Args:
+        html_file: Путь к HTML-файлу (data/knowledge.html)
+        sections_file: Путь к файлу с заголовками разделов (data/sections.json)
+        cache_file: Путь к файлу кэша (data/knowledge_cache.json)
+        model_name: Имя модели для векторизации
+    
+    Returns:
+        True если успешно, False при ошибке
+    """
+    try:
+        # Проверяем наличие необходимых файлов
+        if not html_file.exists():
+            logger.error(f"HTML file not found: {html_file}")
+            return False
+        
+        if not sections_file.exists():
+            logger.error(f"Sections file not found: {sections_file}")
+            return False
+        
+        logger.info(f"Starting vectorization of content from {html_file}")
+        
+        # Строим embeddings из HTML-файла
+        embeddings_data = build_embeddings_from_html(html_file, sections_file)
+        
+        if embeddings_data is None:
+            logger.error("Failed to build embeddings. Check if model is loaded and files are valid.")
+            return False
+        
+        # Сохраняем embeddings в кэш
+        save_embeddings_to_cache(cache_file, embeddings_data)
+        
+        # Обновляем section_images в основном кэше, если нужно
+        try:
+            from src.google_docs import load_cache, save_cache
+            
+            cache_data = load_cache(cache_file)
+            if cache_data is None:
+                cache_data = {}
+            
+            # Добавляем section_images из embeddings_data
+            sections_images = embeddings_data.get('sections_images', {})
+            if sections_images:
+                section_images_serializable = {
+                    section_title: image_paths
+                    for section_title, image_paths in sections_images.items()
+                }
+                cache_data['section_images'] = section_images_serializable
+                logger.info(
+                    f"Updated section_images: {len(sections_images)} sections, "
+                    f"total {sum(len(imgs) for imgs in sections_images.values())} images"
+                )
+            
+            # Сохраняем обновленный кэш
+            save_cache(cache_file, cache_data)
+        except Exception as e:
+            logger.warning(f"Could not update section_images in cache: {e}")
+        
+        logger.info("Content vectorization completed successfully")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error vectorizing content: {e}", exc_info=True)
+        return False
 
 
 def load_embeddings_from_cache(cache_file: Path) -> Optional[Dict[str, Any]]:

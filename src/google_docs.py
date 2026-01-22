@@ -483,69 +483,8 @@ def import_document(url: str, output_dir: Path) -> Dict[str, Any]:
             'images': image_paths
         }
 
-        # Строим embeddings и извлекаем связь изображений с разделами
-        if html_file:
-            try:
-                from src.search import (
-                    build_embeddings_from_html,
-                    save_embeddings_to_cache,
-                    build_search_index,
-                )
-
-                sections_file = output_dir / "sections.json"
-                if sections_file.exists():
-                    logger.info("Building embeddings and extracting section images...")
-                    
-                    # Пытаемся построить embeddings для семантического поиска
-                    embeddings_data = build_embeddings_from_html(html_file, sections_file)
-                    
-                    if embeddings_data:
-                        # Сохраняем embeddings в кэш
-                        save_embeddings_to_cache(cache_file, embeddings_data)
-                        
-                        # Извлекаем sections_images из embeddings_data
-                        sections_images = embeddings_data.get('sections_images', {})
-                        
-                        # Сохраняем связь изображений с разделами в кэш
-                        section_images_serializable = {
-                            section_title: image_paths
-                            for section_title, image_paths in sections_images.items()
-                        }
-                        cache_data['section_images'] = section_images_serializable
-                        logger.info(
-                            f"Extracted images for {len(sections_images)} sections, "
-                            f"total {sum(len(imgs) for imgs in sections_images.values())} images"
-                        )
-                        logger.info("Embeddings built and saved successfully")
-                    else:
-                        # Если embeddings не удалось построить, строим обычный индекс
-                        logger.warning("Failed to build embeddings. Falling back to token-based search index.")
-                        from src.search import (
-                            load_sections,
-                            parse_html_sections,
-                        )
-                        
-                        sections = load_sections(sections_file)
-                        with open(html_file, "r", encoding="utf-8") as f:
-                            html_content = f.read()
-                        
-                        sections_content, sections_images = parse_html_sections(html_content, sections)
-                        
-                        section_images_serializable = {
-                            section_title: image_paths
-                            for section_title, image_paths in sections_images.items()
-                        }
-                        cache_data['section_images'] = section_images_serializable
-                        
-                        index = build_search_index(sections_content)
-                        if index:
-                            cache_data['search_index'] = index
-                            logger.info("Token-based search index built successfully")
-                else:
-                    logger.warning(f"Sections file not found: {sections_file}, skipping embeddings build")
-            except Exception as e:
-                logger.error(f"Error building embeddings: {e}", exc_info=True)
-
+        # Сохраняем метаданные в кэш
+        # Векторизация выполняется отдельно через команду /admin vectorize или функцию vectorize_content()
         save_cache(cache_file, cache_data)
 
         return {
