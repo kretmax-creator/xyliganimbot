@@ -21,14 +21,14 @@ logger = get_logger(__name__)
 
 
 def download_model(
-    model_name: str = "paraphrase-multilingual-MiniLM-L12-v2",
+    model_name: str = "intfloat/multilingual-e5-small",
     models_dir: Path = Path("models")
 ) -> bool:
     """
     Загружает embedding-модель из HuggingFace и сохраняет локально.
 
     Args:
-        model_name: Имя модели для загрузки (по умолчанию paraphrase-multilingual-MiniLM-L12-v2)
+        model_name: Имя модели для загрузки (по умолчанию intfloat/multilingual-e5-small)
         models_dir: Директория для сохранения моделей (по умолчанию models/)
 
     Returns:

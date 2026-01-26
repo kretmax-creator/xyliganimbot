@@ -21,7 +21,7 @@ def main():
     print("ТЕСТ: Загрузка embedding-модели")
     print("=" * 60)
     
-    model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+    model_name = "intfloat/multilingual-e5-small"
     models_dir = project_root / "models"
     
     print(f"Модель: {model_name}")

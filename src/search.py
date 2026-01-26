@@ -29,6 +29,66 @@ logger = get_logger(__name__)
 # Глобальная переменная для кэширования embedding-модели
 _embedding_model: Optional[SentenceTransformer] = None
 
+# Словарь замен для нормализации запросов (синонимы, транслитерация)
+QUERY_REPLACEMENTS = {
+    "впн": "vpn",
+    "аутлук": "outlook",
+    "дион": "dion",
+    "рутокен": "rutoken",
+    "токен": "rutoken",  # Часто под токеном имеют в виду именно rutoken
+    "сфера": "sfera",
+    "виртуалка": "virtualbox",
+    "врм": "vrm",
+    "иннотех": "innotech",
+    "девкорп": "devcorp",
+    "регион": "region",
+    "сакура": "sakura",
+    "длп": "dlp",
+    "кес": "kes",
+    "вайфай": "wifi",
+    "эксель": "excel",
+    "ворд": "word",
+    "офис": "office",
+    "тимс": "teams",
+    "зум": "zoom",
+    "скайп": "skype",
+    "антивирус": "antivirus",
+}
+
+
+def preprocess_query(query: str) -> str:
+    """
+    Предобрабатывает поисковый запрос: заменяет синонимы и транслитерацию.
+    Фильтрует запросы, содержащие только специальные символы.
+    
+    Args:
+        query: Исходный запрос
+        
+    Returns:
+        Обработанный запрос или пустая строка, если запрос содержит только символы
+    """
+    if not query:
+        return ""
+    
+    # Проверка: содержит ли запрос хотя бы одну букву или цифру
+    if not re.search(r'[а-яёa-z0-9]', query, re.IGNORECASE):
+        logger.info(f"Query contains only symbols, filtering out: '{query}'")
+        return ""
+        
+    # Приводим к нижнему регистру
+    processed_query = query.lower()
+    
+    # Заменяем слова из словаря
+    # Используем word boundaries \b, чтобы не заменять части слов
+    for ru_term, en_term in QUERY_REPLACEMENTS.items():
+        pattern = r'\b' + re.escape(ru_term) + r'\b'
+        processed_query = re.sub(pattern, en_term, processed_query)
+    
+    if processed_query != query.lower():
+        logger.info(f"Query preprocessed: '{query}' -> '{processed_query}'")
+        
+    return processed_query
+
 
 class HTMLTextExtractor(HTMLParser):
     """Парсер HTML для извлечения текста без тегов."""
@@ -47,36 +107,33 @@ class HTMLTextExtractor(HTMLParser):
         return " ".join(self.text_parts)
 
 
-def load_sections(sections_file: Path) -> List[str]:
+def extract_sections_from_markdown(markdown_content: str) -> List[str]:
     """
-    Загружает заголовки разделов из JSON-файла.
-
+    Автоматически извлекает заголовки разделов из Markdown-документа.
+    
+    Ищет заголовки уровня 2 (##) и выше, которые являются разделами документа.
+    
     Args:
-        sections_file: Путь к файлу с заголовками разделов
-
+        markdown_content: Содержимое Markdown-документа
+    
     Returns:
-        Список заголовков разделов
-
-    Raises:
-        FileNotFoundError: Если файл не найден
-        json.JSONDecodeError: Если файл имеет некорректный формат
+        Список заголовков разделов в порядке их появления
     """
-    if not sections_file.exists():
-        error_msg = f"Sections file not found: {sections_file}"
-        logger.error(error_msg)
-        raise FileNotFoundError(error_msg)
-
-    try:
-        with open(sections_file, "r", encoding="utf-8") as f:
-            sections = json.load(f)
-            if not isinstance(sections, list):
-                raise ValueError("Sections file must contain a list of strings")
-            logger.info(f"Loaded {len(sections)} section headers from {sections_file}")
-            return sections
-    except json.JSONDecodeError as e:
-        error_msg = f"Invalid JSON format in sections file {sections_file}: {e}"
-        logger.error(error_msg)
-        raise json.JSONDecodeError(error_msg, e.doc, e.pos) from e
+    sections = []
+    lines = markdown_content.split('\n')
+    
+    for line in lines:
+        line_stripped = line.strip()
+        # Ищем заголовки уровня 2 (##) и выше
+        if line_stripped.startswith('##'):
+            # Убираем символы # и пробелы в начале
+            title = line_stripped.lstrip('#').strip()
+            if title:  # Проверяем, что заголовок не пустой
+                sections.append(title)
+                logger.debug(f"Found section: {title}")
+    
+    logger.info(f"Extracted {len(sections)} sections from Markdown")
+    return sections
 
 
 def normalize_text(text: str) -> str:
@@ -114,25 +171,164 @@ def tokenize_text(text: str) -> List[str]:
     return tokens
 
 
-def extract_text_from_html(html_content: str) -> str:
+def extract_text_from_markdown(markdown_content: str) -> str:
     """
-    Извлекает текст из HTML, удаляя теги.
+    Извлекает чистый текст из Markdown, удаляя форматирование.
 
     Args:
-        html_content: HTML-контент
+        markdown_content: Markdown-контент
 
     Returns:
-        Текст без HTML-тегов
+        Текст без Markdown-разметки
     """
-    parser = HTMLTextExtractor()
-    parser.feed(html_content)
-    text = parser.get_text()
-    # Декодируем HTML-сущности
-    text = unescape(text)
-    return text
+    # Удаляем заголовки (# ## ###)
+    text = re.sub(r'^#{1,6}\s+', '', markdown_content, flags=re.MULTILINE)
+    # Удаляем жирный текст (**text** или __text__)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    # Удаляем курсив (*text* или _text_)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'_([^_]+)_', r'\1', text)
+    # Удаляем ссылки [text](url)
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    # Удаляем изображения ![alt](url)
+    text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', text)
+    # Удаляем код `code`
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    # Удаляем блоки кода ```code```
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    # Удаляем списки (- * +)
+    text = re.sub(r'^[\s]*[-*+]\s+', '', text, flags=re.MULTILINE)
+    # Удаляем нумерованные списки
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+    # Удаляем горизонтальные линии (---)
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+    # Удаляем лишние пустые строки
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
-def extract_images_from_html_section(html_section: str) -> List[str]:
+def extract_images_from_markdown_section(markdown_section: str) -> List[str]:
+    """
+    Извлекает пути к изображениям из Markdown-фрагмента раздела.
+
+    Args:
+        markdown_section: Markdown-фрагмент раздела
+
+    Returns:
+        Список относительных путей к изображениям (например, ["images/file1.png"])
+    """
+    images = []
+    # Ищем все изображения в формате ![alt](path)
+    pattern = r'!\[([^\]]*)\]\(([^\)]+)\)'
+    matches = re.findall(pattern, markdown_section)
+    
+    for alt, src in matches:
+        # Обрабатываем только локальные пути, которые начинаются с "images/"
+        if src.startswith('images/') or src.startswith('./images/'):
+            normalized_path = src.replace('./', '')
+            if normalized_path not in images:
+                images.append(normalized_path)
+                logger.debug(f"Found image in section: {normalized_path}")
+    
+    return images
+
+
+def find_section_in_markdown(markdown_content: str, section_title: str) -> Optional[int]:
+    """
+    Находит позицию заголовка раздела в Markdown.
+
+    Args:
+        markdown_content: Markdown-контент
+        section_title: Заголовок раздела для поиска
+
+    Returns:
+        Позиция начала заголовка в Markdown или None, если не найдено
+    """
+    # Нормализуем заголовок для поиска
+    normalized_title = normalize_text(section_title)
+    
+    # Ищем заголовок в формате Markdown (# Заголовок)
+    # Проверяем разные уровни заголовков (# ## ### и т.д.)
+    patterns = [
+        rf'^#+\s+{re.escape(section_title)}\s*$',  # Точное совпадение с #
+        rf'^#+\s+{re.escape(section_title)}',  # Начало строки с #
+    ]
+    
+    lines = markdown_content.split('\n')
+    for i, line in enumerate(lines):
+        line_normalized = normalize_text(line)
+        # Проверяем точное совпадение
+        if normalized_title in line_normalized:
+            # Проверяем, что это заголовок (начинается с #)
+            if line.strip().startswith('#'):
+                # Вычисляем позицию в исходном тексте
+                pos = sum(len(l) + 1 for l in lines[:i])  # +1 для \n
+                return pos
+    
+    return None
+
+
+def parse_markdown_sections(markdown_content: str, sections: Optional[List[str]] = None) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """
+    Разбивает Markdown-документ на разделы по заголовкам и извлекает изображения для каждого раздела.
+
+    Args:
+        markdown_content: Markdown-контент документа
+        sections: Опционально - список заголовков разделов. Если не указан, извлекается автоматически из Markdown.
+
+    Returns:
+        Кортеж (sections_content, sections_images):
+        - sections_content: словарь заголовок раздела -> текст раздела
+        - sections_images: словарь заголовок раздела -> список путей к изображениям
+    """
+    sections_content = {}
+    sections_images = {}
+    
+    # Если список разделов не передан, извлекаем автоматически
+    if sections is None:
+        sections = extract_sections_from_markdown(markdown_content)
+
+    for i, section_title in enumerate(sections):
+        # Находим позицию текущего раздела
+        current_pos = find_section_in_markdown(markdown_content, section_title)
+
+        if current_pos is None:
+            logger.warning(f"Section '{section_title}' not found in Markdown")
+            sections_content[section_title] = ""
+            sections_images[section_title] = []
+            continue
+
+        # Находим позицию следующего раздела
+        next_pos = None
+        if i + 1 < len(sections):
+            next_section_title = sections[i + 1]
+            next_pos = find_section_in_markdown(markdown_content, next_section_title)
+
+        # Извлекаем Markdown раздела
+        if next_pos is not None and next_pos > current_pos:
+            section_markdown = markdown_content[current_pos:next_pos]
+        else:
+            # Последний раздел - берем до конца
+            section_markdown = markdown_content[current_pos:]
+
+        # Извлекаем текст из Markdown раздела (убираем разметку)
+        section_text = extract_text_from_markdown(section_markdown)
+        sections_content[section_title] = section_text
+        
+        # Извлекаем изображения из Markdown раздела
+        section_image_paths = extract_images_from_markdown_section(section_markdown)
+        sections_images[section_title] = section_image_paths
+        
+        logger.debug(
+            f"Extracted section '{section_title}': {len(section_text)} chars, "
+            f"{len(section_image_paths)} images"
+        )
+
+    return sections_content, sections_images
+
+
+def extract_text_from_html(html_content: str) -> str:
     """
     Извлекает пути к изображениям из HTML-фрагмента раздела.
 
@@ -286,7 +482,7 @@ def parse_html_sections(html_content: str, sections: List[str]) -> Tuple[Dict[st
     return sections_content, sections_images
 
 
-def load_embedding_model(model_name: str = "paraphrase-multilingual-MiniLM-L12-v2") -> Optional[SentenceTransformer]:
+def load_embedding_model(model_name: str = "intfloat/multilingual-e5-small") -> Optional[SentenceTransformer]:
     """
     Загружает embedding-модель ТОЛЬКО из локальной папки models/.
     
@@ -294,7 +490,7 @@ def load_embedding_model(model_name: str = "paraphrase-multilingual-MiniLM-L12-v
     Автозагрузка из HuggingFace не выполняется.
     
     Args:
-        model_name: Имя модели (по умолчанию paraphrase-multilingual-MiniLM-L12-v2)
+        model_name: Имя модели (по умолчанию intfloat/multilingual-e5-small)
     
     Returns:
         Загруженная модель или None, если не найдена локально
@@ -358,8 +554,10 @@ def vectorize_sections(
         
         for section_title, section_text in sections_content.items():
             # Комбинируем заголовок и текст для лучшего понимания контекста
+            # E5 модель требует префикс "passage: " для документов
             combined_text = f"{section_title}. {section_text}".strip()
-            texts_to_encode.append(combined_text)
+            e5_text = f"passage: {combined_text}"
+            texts_to_encode.append(e5_text)
             section_titles.append(section_title)
         
         if not texts_to_encode:
@@ -386,6 +584,63 @@ def vectorize_sections(
     
     except Exception as e:
         logger.error(f"Error vectorizing sections: {e}", exc_info=True)
+        return None
+
+
+def build_embeddings_from_markdown(
+    markdown_file: Path
+) -> Optional[Dict[str, Any]]:
+    """
+    Строит embeddings из Markdown-файла.
+    
+    Args:
+        markdown_file: Путь к Markdown-файлу
+    
+    Returns:
+        Словарь с embeddings данными или None при ошибке:
+        - embeddings: список списков (для JSON-сериализации)
+        - section_titles: список заголовков разделов
+        - sections_content: словарь заголовок -> текст
+        - sections_images: словарь заголовок -> список путей к изображениям
+    """
+    try:
+        # Загружаем Markdown-контент
+        if not markdown_file.exists():
+            logger.error(f"Markdown file not found: {markdown_file}")
+            return None
+        
+        with open(markdown_file, "r", encoding="utf-8") as f:
+            markdown_content = f.read()
+        
+        logger.info(f"Building embeddings from {markdown_file}")
+        
+        # Разбиваем на разделы (автоматически извлекаем заголовки)
+        sections_content, sections_images = parse_markdown_sections(markdown_content)
+        
+        # Векторизуем разделы
+        vectorization_result = vectorize_sections(sections_content)
+        
+        if vectorization_result is None:
+            logger.error("Failed to vectorize sections. Falling back to token-based search.")
+            return None
+        
+        embeddings_array, section_titles = vectorization_result
+        
+        # Преобразуем numpy array в список списков для JSON-сериализации
+        embeddings_list = embeddings_array.tolist()
+        
+        return {
+            "embeddings": embeddings_list,
+            "section_titles": section_titles,
+            "sections_content": sections_content,
+            "sections_images": sections_images,
+        }
+    
+    except FileNotFoundError as e:
+        logger.error(f"Error building embeddings: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error building embeddings: {e}", exc_info=True)
         return None
 
 
@@ -480,10 +735,9 @@ def save_embeddings_to_cache(cache_file: Path, embeddings_data: Dict[str, Any]) 
 
 
 def vectorize_content(
-    html_file: Path,
-    sections_file: Path,
+    markdown_file: Path,
     cache_file: Path,
-    model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    model_name: str = "intfloat/multilingual-e5-small"
 ) -> bool:
     """
     Векторизует загруженный контент и сохраняет embeddings в кэш.
@@ -492,8 +746,7 @@ def vectorize_content(
     Требует наличия модели в папке models/ (загруженной через model_loader).
     
     Args:
-        html_file: Путь к HTML-файлу (data/knowledge.html)
-        sections_file: Путь к файлу с заголовками разделов (data/sections.json)
+        markdown_file: Путь к Markdown-файлу (data/knowledge.md)
         cache_file: Путь к файлу кэша (data/knowledge_cache.json)
         model_name: Имя модели для векторизации
     
@@ -502,18 +755,14 @@ def vectorize_content(
     """
     try:
         # Проверяем наличие необходимых файлов
-        if not html_file.exists():
-            logger.error(f"HTML file not found: {html_file}")
+        if not markdown_file.exists():
+            logger.error(f"Markdown file not found: {markdown_file}")
             return False
         
-        if not sections_file.exists():
-            logger.error(f"Sections file not found: {sections_file}")
-            return False
+        logger.info(f"Starting vectorization of content from {markdown_file}")
         
-        logger.info(f"Starting vectorization of content from {html_file}")
-        
-        # Строим embeddings из HTML-файла
-        embeddings_data = build_embeddings_from_html(html_file, sections_file)
+        # Строим embeddings из Markdown-файла
+        embeddings_data = build_embeddings_from_markdown(markdown_file)
         
         if embeddings_data is None:
             logger.error("Failed to build embeddings. Check if model is loaded and files are valid.")
@@ -653,35 +902,31 @@ def build_search_index(sections_content: Dict[str, str]) -> Dict[str, Any]:
     }
 
 
-def build_index_from_html(
-    html_file: Path, sections_file: Path
+def build_index_from_markdown(
+    markdown_file: Path
 ) -> Optional[Dict[str, Any]]:
     """
-    Строит индекс из HTML-файла и заголовков разделов.
+    Строит индекс из Markdown-файла.
 
     Args:
-        html_file: Путь к HTML-файлу
-        sections_file: Путь к файлу с заголовками разделов
+        markdown_file: Путь к Markdown-файлу
 
     Returns:
         Словарь с индексами или None при ошибке
     """
     try:
-        # Загружаем заголовки разделов
-        sections = load_sections(sections_file)
-
-        # Загружаем HTML-контент
-        if not html_file.exists():
-            logger.error(f"HTML file not found: {html_file}")
+        # Загружаем Markdown-контент
+        if not markdown_file.exists():
+            logger.error(f"Markdown file not found: {markdown_file}")
             return None
 
-        with open(html_file, "r", encoding="utf-8") as f:
-            html_content = f.read()
+        with open(markdown_file, "r", encoding="utf-8") as f:
+            markdown_content = f.read()
 
-        logger.info(f"Building search index from {html_file}")
+        logger.info(f"Building search index from {markdown_file}")
 
-        # Разбиваем на разделы
-        sections_content, sections_images = parse_html_sections(html_content, sections)
+        # Разбиваем на разделы (автоматически извлекаем заголовки)
+        sections_content, sections_images = parse_markdown_sections(markdown_content)
 
         # Строим индекс
         index = build_search_index(sections_content)
@@ -756,29 +1001,27 @@ def load_index_from_cache(cache_file: Path) -> Optional[Dict[str, Any]]:
 
 
 def get_section_text(
-    section_title: str, html_file: Path, sections_file: Path
+    section_title: str, markdown_file: Path
 ) -> Optional[str]:
     """
-    Извлекает текст раздела из HTML-файла.
+    Извлекает текст раздела из Markdown-файла.
 
     Args:
         section_title: Заголовок раздела
-        html_file: Путь к HTML-файлу
-        sections_file: Путь к файлу с заголовками разделов
+        markdown_file: Путь к Markdown-файлу
 
     Returns:
         Текст раздела или None, если не найден
     """
     try:
-        if not html_file.exists():
-            logger.warning(f"HTML file not found: {html_file}")
+        if not markdown_file.exists():
+            logger.warning(f"Markdown file not found: {markdown_file}")
             return None
 
-        with open(html_file, "r", encoding="utf-8") as f:
-            html_content = f.read()
+        with open(markdown_file, "r", encoding="utf-8") as f:
+            markdown_content = f.read()
 
-        sections = load_sections(sections_file)
-        sections_content, _ = parse_html_sections(html_content, sections)
+        sections_content, _ = parse_markdown_sections(markdown_content)
 
         return sections_content.get(section_title)
 
@@ -790,20 +1033,33 @@ def get_section_text(
 def get_text_snippet(text: str, max_length: int = 300) -> str:
     """
     Возвращает snippet текста или полный текст для небольших разделов.
-
+    
+    Убирает лишние пустые строки и нормализует пробелы.
+    
     Args:
         text: Текст раздела
         max_length: Максимальная длина snippet (по умолчанию 300 символов)
-
+    
     Returns:
         Snippet или полный текст, если раздел небольшой (< 500 символов)
     """
     if not text:
         return ""
     
+    # Убираем лишние пустые строки (более 2 подряд)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Убираем пробелы в начале и конце строк
+    lines = [line.rstrip() for line in text.split('\n')]
+    # Убираем пустые строки в начале и конце
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    text = '\n'.join(lines)
+    
     # Если раздел небольшой (< 500 символов), возвращаем полный текст
     if len(text) < 500:
-        return text
+        return text.strip()
     
     # Для больших разделов возвращаем snippet
     if len(text) > max_length:
@@ -812,9 +1068,9 @@ def get_text_snippet(text: str, max_length: int = 300) -> str:
         last_space = snippet.rfind(' ')
         if last_space > max_length * 0.8:  # Если пробел не слишком далеко от конца
             snippet = snippet[:last_space]
-        return snippet + "..."
+        return snippet.strip() + "..."
     
-    return text
+    return text.strip()
 
 
 def semantic_search(
@@ -822,7 +1078,7 @@ def semantic_search(
     embeddings_data: Dict[str, Any],
     model: Optional[SentenceTransformer] = None,
     limit: int = 5,
-    min_score: float = 0.3
+    min_score: float = 0.25
 ) -> List[Dict[str, Any]]:
     """
     Выполняет семантический поиск через косинусное сходство векторов.
@@ -849,6 +1105,14 @@ def semantic_search(
     
     if not query or not query.strip():
         logger.debug("Empty query provided for semantic search")
+        return []
+    
+    # Предобработка запроса (замена синонимов)
+    processed_query = preprocess_query(query)
+    
+    # Если запрос был отфильтрован (только символы), возвращаем пустой результат
+    if not processed_query or not processed_query.strip():
+        logger.debug("Query filtered out (contains only symbols)")
         return []
     
     try:
@@ -896,8 +1160,10 @@ def semantic_search(
             embeddings_array = embeddings_list
         
         # Векторизуем запрос
-        logger.info(f"Vectorizing query: '{query[:50]}...'")
-        query_embedding = model.encode(query, show_progress_bar=False)
+        # E5 модель требует префикс "query: " для запросов
+        e5_query = f"query: {processed_query}"
+        logger.info(f"Vectorizing query: '{processed_query[:50]}...'")
+        query_embedding = model.encode(e5_query, show_progress_bar=False)
         
         # Приводим query_embedding к numpy array и float32, если нужно
         if np is not None:
@@ -969,8 +1235,7 @@ def semantic_search(
 def search(
     query: str,
     index: Dict[str, Any],
-    html_file: Optional[Path] = None,
-    sections_file: Optional[Path] = None,
+    markdown_file: Optional[Path] = None,
     sections_content: Optional[Dict[str, str]] = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
@@ -984,8 +1249,7 @@ def search(
     Args:
         query: Поисковый запрос
         index: Словарь с индексами или embeddings данными
-        html_file: Опционально - путь к HTML-файлу для извлечения текста разделов
-        sections_file: Опционально - путь к файлу с заголовками разделов
+        markdown_file: Опционально - путь к Markdown-файлу для извлечения текста разделов
         sections_content: Опционально - уже распарсенные разделы (словарь заголовок -> текст)
         limit: Максимальное количество результатов (по умолчанию 5)
 
@@ -997,6 +1261,14 @@ def search(
     """
     if not query or not query.strip():
         logger.debug("Empty query provided")
+        return []
+
+    # Предобработка запроса (замена синонимов)
+    processed_query = preprocess_query(query)
+    
+    # Если запрос был отфильтрован (только символы), возвращаем пустой результат
+    if not processed_query or not processed_query.strip():
+        logger.debug("Query filtered out (contains only symbols)")
         return []
 
     if not index:
@@ -1011,10 +1283,10 @@ def search(
     if has_embeddings:
         logger.info("Using semantic search (embeddings found)")
         results = semantic_search(
-            query=query,
+            query=query,  # semantic_search сам вызовет preprocess_query
             embeddings_data=index,
             limit=limit,
-            min_score=0.3
+            min_score=0.25  # Повышен порог для фильтрации нерелевантных результатов
         )
         return results
 
@@ -1032,12 +1304,12 @@ def search(
         return []
 
     # Токенизируем запрос
-    query_tokens = tokenize_text(query)
+    query_tokens = tokenize_text(processed_query)
     if not query_tokens:
-        logger.debug(f"No tokens found in query: {query}")
+        logger.debug(f"No tokens found in query: {processed_query}")
         return []
 
-    logger.info(f"Searching for query: '{query}' ({len(query_tokens)} tokens)")
+    logger.info(f"Searching for query: '{processed_query}' ({len(query_tokens)} tokens)")
 
     # Словарь для подсчета релевантности разделов
     # Ключ: название раздела, значение: (section_matches, content_matches)
@@ -1081,9 +1353,9 @@ def search(
         if sections_content and section_title in sections_content:
             # Используем уже распарсенные разделы (быстрее)
             section_text = sections_content[section_title]
-        elif html_file and sections_file:
-            # Парсим HTML только если не предоставлены готовые разделы
-            section_text = get_section_text(section_title, html_file, sections_file)
+        elif markdown_file:
+            # Парсим Markdown только если не предоставлены готовые разделы
+            section_text = get_section_text(section_title, markdown_file)
 
         # Формируем snippet или полный текст
         text = get_text_snippet(section_text) if section_text else ""

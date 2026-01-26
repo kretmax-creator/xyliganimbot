@@ -186,8 +186,10 @@ def main() -> None:
         # Загрузка embeddings или поискового индекса
         project_root = Path(__file__).parent.parent
         cache_file = project_root / "data" / "knowledge_cache.json"
-        html_file = project_root / "data" / "knowledge.html"
-        sections_file = project_root / "data" / "sections.json"
+        markdown_file = project_root / "data" / "knowledge.md"
+        # Проверяем также старый формат HTML для обратной совместимости
+        if not markdown_file.exists():
+            markdown_file = project_root / "data" / "knowledge.html"
         images_dir = project_root / "data" / "images"
         models_dir = project_root / "models"
 
@@ -195,19 +197,13 @@ def main() -> None:
         logger.info("Checking required data availability...")
         
         # Проверка наличия документа
-        if not html_file.exists():
-            logger.warning(f"HTML file not found: {html_file}")
+        if not markdown_file.exists():
+            logger.warning(f"Markdown/HTML file not found: {markdown_file}")
         else:
-            logger.info(f"HTML file found: {html_file}")
-        
-        # Проверка наличия файла с разделами
-        if not sections_file.exists():
-            logger.warning(f"Sections file not found: {sections_file}")
-        else:
-            logger.info(f"Sections file found: {sections_file}")
+            logger.info(f"Markdown/HTML file found: {markdown_file}")
         
         # Проверка наличия embedding-модели (для семантического поиска)
-        model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+        model_name = "intfloat/multilingual-e5-small"
         model_path = models_dir / model_name
         if model_path.exists():
             logger.info(f"Embedding model found: {model_path}")
@@ -235,8 +231,7 @@ def main() -> None:
             # Используем embeddings для семантического поиска
             init_search_context(
                 index=embeddings_data,
-                html_file=html_file,
-                sections_file=sections_file,
+                markdown_file=markdown_file,
                 images_dir=images_dir,
             )
         else:
@@ -247,8 +242,7 @@ def main() -> None:
                 logger.info("Token-based search index loaded successfully")
                 init_search_context(
                     index=search_index_data,
-                    html_file=html_file,
-                    sections_file=sections_file,
+                    markdown_file=markdown_file,
                     images_dir=images_dir,
                 )
             else:
@@ -260,8 +254,7 @@ def main() -> None:
                 # Инициализируем с пустым индексом, чтобы бот мог работать
                 init_search_context(
                     index={"section_index": {}, "content_index": {}},
-                    html_file=html_file,
-                    sections_file=sections_file,
+                    markdown_file=markdown_file,
                     images_dir=images_dir,
                 )
 
