@@ -498,6 +498,10 @@ def import_document(url: str, output_dir: Path) -> Dict[str, Any]:
     except urllib.error.URLError as e:
         error_msg = f"Network error while importing document: {e}"
         logger.error(error_msg)
+        logger.warning(
+            "Google Docs unavailable. Existing local files (cache) unchanged. "
+            "Bot can continue using cached content."
+        )
         return {
             'success': False,
             'document_id': document_id,

@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 
 from src.search import search
 from src.logging import get_logger
+from src.audit import log_operation
 
 logger = get_logger(__name__)
 
@@ -250,6 +251,11 @@ async def handle_search_query(
             await message.reply_text("Пожалуйста, введите поисковый запрос.")
         except Exception as e:
             logger.error(f"Error sending empty-query message: {e}")
+        if context:
+            log_operation(
+                user.id, user.username, "search", "empty_query",
+                request_text="", include_request_text=context.bot_data.get("log_user_messages", False),
+            )
         return
 
     logger.info(
@@ -270,6 +276,12 @@ async def handle_search_query(
             )
         except Exception as e:
             logger.error(f"Error sending error message: {e}")
+        if context:
+            log_operation(
+                user.id, user.username, "search", "error",
+                request_text=query, include_request_text=context.bot_data.get("log_user_messages", False),
+                error="document not found",
+            )
         return
     
     # Проверяем наличие поискового индекса и embeddings
@@ -291,6 +303,12 @@ async def handle_search_query(
             )
         except Exception as e:
             logger.error(f"Error sending error message: {e}")
+        if context:
+            log_operation(
+                user.id, user.username, "search", "error",
+                request_text=query, include_request_text=context.bot_data.get("log_user_messages", False),
+                error="index not loaded",
+            )
         return
 
     # Для семантического поиска проверяем наличие модели
@@ -306,6 +324,12 @@ async def handle_search_query(
                 )
             except Exception as e:
                 logger.error(f"Error sending error message: {e}")
+            if context:
+                log_operation(
+                    user.id, user.username, "search", "error",
+                    request_text=query, include_request_text=context.bot_data.get("log_user_messages", False),
+                    error="model not loaded",
+                )
             return
 
     # Выполняем поиск
@@ -331,6 +355,14 @@ async def handle_search_query(
         # Отправляем результаты
         await send_search_response(update, results)
 
+        if context:
+            include_req = context.bot_data.get("log_user_messages", False)
+            result_str = f"found_{len(results)}" if results else "no_results"
+            log_operation(
+                user.id, user.username, "search", result_str,
+                request_text=query, include_request_text=include_req,
+            )
+
     except Exception as e:
         logger.error(f"Error processing search query: {e}", exc_info=True)
         try:
@@ -339,3 +371,9 @@ async def handle_search_query(
             )
         except Exception as e2:
             logger.error(f"Error sending error message: {e2}", exc_info=True)
+        if context:
+            log_operation(
+                user.id, user.username, "search", "error",
+                request_text=query, include_request_text=context.bot_data.get("log_user_messages", False),
+                error=str(e),
+            )

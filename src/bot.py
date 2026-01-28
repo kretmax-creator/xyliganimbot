@@ -165,6 +165,25 @@ def create_application(token: str, bot_username: str) -> Application:
 
     application.add_handler(CommandHandler("search", search_cmd_wrapper))
 
+    # Централизованная обработка ошибок (итерация 11)
+    async def error_handler(
+        update: Optional[Update], context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if context.error:
+            logger.error(
+                f"Unhandled error: {context.error}",
+                exc_info=context.error if isinstance(context.error, BaseException) else True,
+            )
+        if update and getattr(update, "effective_message", None):
+            try:
+                await update.effective_message.reply_text(
+                    "Произошла ошибка. Попробуйте позже."
+                )
+            except Exception as send_err:
+                logger.error(f"Could not send error message to user: {send_err}")
+
+    application.add_error_handler(error_handler)
+
     return application
 
 
@@ -305,6 +324,7 @@ def main() -> None:
         # Создание приложения
         bot_username = get_bot_username(config)
         application = create_application(token, bot_username)
+        application.bot_data["log_user_messages"] = logging_config["log_user_messages"]
 
         # Запуск long polling
         logger.info("Bot started, waiting for messages...")

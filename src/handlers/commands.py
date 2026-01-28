@@ -10,6 +10,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from src.logging import get_logger
+from src.audit import log_operation
 from src.model_loader import download_model
 from src.search import vectorize_content, load_embeddings_from_cache, load_index_from_cache
 from src.handlers.messages import init_search_context
@@ -68,8 +69,27 @@ async def handle_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         await update.message.reply_text(help_text, parse_mode="Markdown")
         logger.info(f"Help message sent to user_id={user.id}")
+        include_request = context.bot_data.get("log_user_messages", False) if context else False
+        log_operation(
+            telegram_id=user.id,
+            username=user.username,
+            operation="help",
+            result="ok",
+            request_text="/help",
+            include_request_text=include_request,
+        )
     except Exception as e:
         logger.error(f"Error sending help message: {e}", exc_info=True)
+        if context:
+            log_operation(
+                telegram_id=user.id,
+                username=user.username,
+                operation="help",
+                result="error",
+                request_text="/help",
+                include_request_text=context.bot_data.get("log_user_messages", False),
+                error=str(e),
+            )
 
 
 async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -102,9 +122,20 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
             "/admin load_model — загрузить embedding-модель\n"
             "/admin vectorize — векторизовать контент и обновить кэш"
         )
+        include_req = context.bot_data.get("log_user_messages", False)
+        log_operation(
+            telegram_id=user.id,
+            username=user.username,
+            operation="admin_unknown",
+            result="ok",
+            request_text=f"/admin {subcommand}",
+            include_request_text=include_req,
+        )
         return
 
     project_root, cache_file, markdown_file, images_dir, models_dir = _get_project_paths()
+    include_req = context.bot_data.get("log_user_messages", False)
+    req_text = f"/admin {subcommand}"
 
     if subcommand == "load_model":
         logger.info(f"Admin load_model from user_id={user.id}, username={user.username}")
@@ -114,14 +145,17 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
             if ok:
                 await update.message.reply_text("Модель загружена успешно.")
                 logger.info(f"Admin load_model completed successfully for user_id={user.id}")
+                log_operation(user.id, user.username, "admin_load_model", "ok", req_text, include_req)
             else:
                 await update.message.reply_text(
                     "Ошибка при загрузке модели. Проверьте логи и наличие sentence-transformers."
                 )
                 logger.warning(f"Admin load_model failed for user_id={user.id}")
+                log_operation(user.id, user.username, "admin_load_model", "error", req_text, include_req, error="download failed")
         except Exception as e:
             logger.error(f"Admin load_model error: {e}", exc_info=True)
             await update.message.reply_text(f"Ошибка: {e}")
+            log_operation(user.id, user.username, "admin_load_model", "error", req_text, include_req, error=str(e))
 
     elif subcommand == "vectorize":
         logger.info(f"Admin vectorize from user_id={user.id}, username={user.username}")
@@ -131,6 +165,7 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
                     f"Файл документа не найден: {markdown_file}. "
                     "Сначала загрузите контент (например, из Google Docs)."
                 )
+                log_operation(user.id, user.username, "admin_vectorize", "error", req_text, include_req, error="markdown file not found")
                 return
             await update.message.reply_text("Векторизация запущена…")
             ok = vectorize_content(
@@ -143,6 +178,7 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
                     "Ошибка при векторизации. Проверьте наличие модели и логи."
                 )
                 logger.warning(f"Admin vectorize failed for user_id={user.id}")
+                log_operation(user.id, user.username, "admin_vectorize", "error", req_text, include_req, error="vectorize failed")
                 return
             # Перезагрузить контекст поиска после успешной векторизации
             embeddings_data = load_embeddings_from_cache(cache_file)
@@ -163,6 +199,8 @@ async def handle_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
                     )
                 await update.message.reply_text("Векторизация завершена.")
             logger.info(f"Admin vectorize completed successfully for user_id={user.id}")
+            log_operation(user.id, user.username, "admin_vectorize", "ok", req_text, include_req)
         except Exception as e:
             logger.error(f"Admin vectorize error: {e}", exc_info=True)
             await update.message.reply_text(f"Ошибка: {e}")
+            log_operation(user.id, user.username, "admin_vectorize", "error", req_text, include_req, error=str(e))
