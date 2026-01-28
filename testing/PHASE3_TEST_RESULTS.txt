@@ -1,0 +1,22 @@
+============================================================
+Фаза 3 итерации 8.2: автоматизированное тестирование поиска
+============================================================
+Индекс: 29 разделов
+Markdown: C:\VirtualBox\shared\xyliganimbot\data\knowledge.md
+
+  [PASS] TC-1.4.2/TC-2.2.2: Nerelevantnyj zapros -> pustoj spisok
+  [PASS] TC-1.5.2: Zapros vne konteksta -> pustoj spisok
+  [FAIL] TC-2.2.2: Bessmyslennyj zapros -> pustoj spisok
+       n=5, first_score=0.830020546913147, first_title='7. Troubleshooting'...
+  [PASS] TC-1.2.2: Otricanie: net razдела Innoteh v rezultatakh
+  [FAIL] TC-1.8.4: Razdel 9. Podderzhka v top-2
+       n=5, first_score=1.1851655006408692, first_title='3.3 Установка обязательного ПО на виртуальную маши'...
+  [PASS] TC-1.9.4: Vne konteksta -> pustoj ili nizkij score
+  [PASS] TC-1.1.1: Tochnoe sovpadenie Outlook v pervom rezultate
+  [PASS] TC-1.1.3: Zapros po soderzhimomu -> razdel 3.1 ili token v top
+  [PASS] TC-1.3.1: Korotkij zapros VPN -> est rezultaty, score >= 0.6
+
+Итог:
+  Пройдено: 7/9 (78%)
+  Провалено: 2
+  Целевая метрика >90%: не достигнута

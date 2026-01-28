@@ -12,7 +12,8 @@ if sys.platform == 'win32':
     os.system('chcp 65001 >nul 2>&1')  # UTF-8
     sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
 
-project_root = Path(__file__).parent
+# Скрипт может запускаться из корня: python testing/test_semantic_search.py
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.logging import setup_logging, get_logger

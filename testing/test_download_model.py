@@ -5,7 +5,8 @@
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent
+# Скрипт может запускаться из корня: python testing/test_download_model.py
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.logging import setup_logging, get_logger

@@ -19,14 +19,13 @@ logger = get_logger(__name__)
 # Глобальные переменные для хранения путей и индекса
 # Инициализируются при старте бота
 search_index: Optional[Dict[str, Any]] = None
-html_file_path: Optional[Path] = None
-sections_file_path: Optional[Path] = None
+markdown_file_path: Optional[Path] = None
 images_dir_path: Optional[Path] = None
 
 
-def escape_markdown(text: str) -> str:
+def escape_html(text: str) -> str:
     """
-    Экранирует специальные символы Markdown для безопасной отправки в Telegram.
+    Экранирует специальные символы HTML для безопасной отправки в Telegram.
 
     Args:
         text: Текст для экранирования
@@ -34,17 +33,16 @@ def escape_markdown(text: str) -> str:
     Returns:
         Экранированный текст
     """
-    # Символы, которые нужно экранировать в Markdown
-    special_chars = ['*', '_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in special_chars:
-        text = text.replace(char, '\\' + char)
+    # Экранируем основные HTML-символы
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
     return text
 
 
 def init_search_context(
     index: Dict[str, Any],
-    html_file: Path,
-    sections_file: Path,
+    markdown_file: Path,
     images_dir: Path,
 ) -> None:
     """
@@ -52,33 +50,36 @@ def init_search_context(
 
     Args:
         index: Поисковый индекс
-        html_file: Путь к HTML-файлу с документом
-        sections_file: Путь к файлу с заголовками разделов
+        markdown_file: Путь к Markdown-файлу с документом (или HTML для обратной совместимости)
         images_dir: Путь к директории с изображениями
     """
-    global search_index, html_file_path, sections_file_path, images_dir_path
+    global search_index, markdown_file_path, images_dir_path
+    
     search_index = index
-    html_file_path = html_file
-    sections_file_path = sections_file
+    markdown_file_path = markdown_file
     images_dir_path = images_dir
-    logger.info("Search context initialized")
+    
+    logger.info(f"Search context initialized:")
+    logger.info(f"  Markdown/HTML file: {markdown_file}")
+    logger.info(f"  Images dir: {images_dir}")
+    logger.info(f"  Index type: {'embeddings' if 'embeddings' in index else 'token-based'}")
 
 
 def format_search_results(results: List[Dict[str, Any]], max_text_length: int = 1000) -> str:
     """
-    Форматирует результаты поиска в текстовое сообщение.
+    Форматирует результаты поиска в текстовое сообщение с HTML-разметкой.
 
     Args:
         results: Список результатов поиска
         max_text_length: Максимальная длина текста раздела в ответе
 
     Returns:
-        Отформатированное текстовое сообщение
+        Отформатированное текстовое сообщение в HTML
     """
     if not results:
         return "❌ По вашему запросу ничего не найдено.\n\nПопробуйте изменить формулировку запроса."
 
-    message_parts = [f"🔍 Найдено разделов: {len(results)}\n"]
+    message_parts = [f"🔍 Найдено разделов: {len(results)}"]
 
     for i, result in enumerate(results, 1):
         section_title = result.get("section_title", "Без названия")
@@ -95,8 +96,8 @@ def format_search_results(results: List[Dict[str, Any]], max_text_length: int = 
         if text and len(text) > max_text_length:
             text = text[:max_text_length] + "..."
 
-        # Экранируем заголовок и текст для безопасного Markdown
-        escaped_title = escape_markdown(section_title)
+        # Экранируем заголовок и текст для безопасного HTML
+        escaped_title = escape_html(section_title)
         
         # Форматируем score для отображения
         if isinstance(score, float):
@@ -104,11 +105,13 @@ def format_search_results(results: List[Dict[str, Any]], max_text_length: int = 
         else:
             score_text = f" (релевантность: {score})"
         
-        message_parts.append(f"\n📌 *{escaped_title}*{score_text}{confidence_warning}")
+        message_parts.append(f"\n📌 <b>{escaped_title}</b>{escape_html(score_text)}{confidence_warning}")
         
         if text:
-            # Экранируем текст, чтобы избежать ошибок парсинга Markdown
-            escaped_text = escape_markdown(text)
+            # Экранируем текст для HTML и убираем лишние пустые строки
+            escaped_text = escape_html(text.strip())
+            # Заменяем множественные переносы строк на одинарные
+            escaped_text = "\n".join(line.strip() for line in escaped_text.split("\n") if line.strip())
             message_parts.append(f"\n{escaped_text}")
         else:
             message_parts.append("\n(Текст раздела недоступен)")
@@ -130,7 +133,7 @@ async def send_search_response(
     Args:
         update: Обновление от Telegram
         results: Список результатов поиска
-        max_images: Максимальное количество изображений для отправки
+        max_images: Максимальное количество изображений для отправки (отключено)
     """
     if not update.message:
         logger.warning("Cannot send search response: no message in update")
@@ -171,33 +174,17 @@ async def send_search_response(
             for i, part in enumerate(parts):
                 if i == 0:
                     # Первое сообщение - как ответ
-                    await update.message.reply_text(part, parse_mode="Markdown")
+                    await update.message.reply_text(part, parse_mode="HTML")
                 else:
                     # Последующие сообщения - обычные
-                    await update.message.chat.send_message(part, parse_mode="Markdown")
+                    await update.message.chat.send_message(part, parse_mode="HTML")
                 logger.info(f"Search response part {i+1}/{len(parts)} sent ({len(part)} chars)")
         else:
             # Отправляем одним сообщением
-            await update.message.reply_text(text_response, parse_mode="Markdown")
+            await update.message.reply_text(text_response, parse_mode="HTML")
             logger.info(f"Search response sent: {len(results)} results ({len(text_response)} chars)")
 
-        # Отправляем изображения, если они есть
-        if images_dir_path and images_dir_path.exists():
-            image_files = list(images_dir_path.glob("*.png")) + list(
-                images_dir_path.glob("*.jpg")
-            ) + list(images_dir_path.glob("*.jpeg"))
-
-            if image_files:
-                # Отправляем ограниченное количество изображений
-                images_to_send = image_files[:max_images]
-                logger.info(f"Sending {len(images_to_send)} images")
-
-                for image_path in images_to_send:
-                    try:
-                        with open(image_path, "rb") as photo:
-                            await update.message.reply_photo(photo=photo)
-                    except Exception as e:
-                        logger.warning(f"Error sending image {image_path}: {e}")
+        # Отправка изображений отключена по запросу пользователя
 
     except Exception as e:
         logger.error(f"Error sending search response: {e}", exc_info=True)
@@ -231,6 +218,10 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = message.text
     if not query or not query.strip():
         logger.debug("Empty query received")
+        try:
+            await message.reply_text("Пожалуйста, введите поисковый запрос.")
+        except Exception as e:
+            logger.error(f"Error sending empty-query message: {e}")
         return
 
     logger.info(
@@ -241,9 +232,9 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Проверяем наличие необходимых данных
     from pathlib import Path
     
-    # Проверка наличия документа
-    if not html_file_path or not html_file_path.exists():
-        logger.warning("HTML file not found")
+    # Проверка наличия документа (Markdown или HTML для обратной совместимости)
+    if not markdown_file_path or not markdown_file_path.exists():
+        logger.warning("Markdown/HTML file not found")
         try:
             await message.reply_text(
                 "Документ базы знаний не найден. "
@@ -253,57 +244,49 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.error(f"Error sending error message: {e}")
         return
     
-    # Проверка наличия файла с разделами
-    if not sections_file_path or not sections_file_path.exists():
-        logger.warning("Sections file not found")
+    # Проверяем наличие поискового индекса и embeddings
+    has_embeddings = (
+        isinstance(search_index, dict)
+        and search_index.get("embeddings") is not None
+        and len(search_index.get("embeddings", [])) > 0
+    )
+    has_token_index = isinstance(search_index, dict) and (
+        bool(search_index.get("section_index")) or bool(search_index.get("content_index"))
+    )
+
+    if not search_index or (not has_embeddings and not has_token_index):
+        logger.warning("Search index missing or embeddings not loaded")
         try:
             await message.reply_text(
-                "Файл с разделами не найден. "
-                "Обратитесь к администратору."
+                "⚠️ База знаний не индексирована. "
+                "Обратитесь к администратору для выполнения команды /admin vectorize."
             )
         except Exception as e:
             logger.error(f"Error sending error message: {e}")
         return
-    
-    # Проверяем, инициализирован ли поисковый индекс
-    if not search_index:
-        logger.error("Search index not initialized")
-        try:
-            await message.reply_text(
-                "Поисковая система не инициализирована. "
-                "Обратитесь к администратору."
-            )
-        except Exception as e:
-            logger.error(f"Error sending error message: {e}")
-        return
-    
-    # Проверка наличия embeddings для семантического поиска
-    has_embeddings = isinstance(search_index, dict) and "embeddings" in search_index
+
+    # Для семантического поиска проверяем наличие модели
     if has_embeddings:
-        # Проверяем наличие модели для семантического поиска
         from src.search import load_embedding_model
         model = load_embedding_model()
         if model is None:
-            logger.warning("Embedding model not available, falling back to token-based search")
-            # Можно продолжить с token-based поиском, если есть token-based индекс
-            if "section_index" not in search_index and "content_index" not in search_index:
-                try:
-                    await message.reply_text(
-                        "Модель для семантического поиска не найдена. "
-                        "Обратитесь к администратору для загрузки модели."
-                    )
-                except Exception as e:
-                    logger.error(f"Error sending error message: {e}")
-                return
+            logger.warning("Embedding model not available")
+            try:
+                await message.reply_text(
+                    "⚠️ Модель поиска не загружена. "
+                    "Обратитесь к администратору для выполнения команды /admin load_model."
+                )
+            except Exception as e:
+                logger.error(f"Error sending error message: {e}")
+            return
 
     # Выполняем поиск
     try:
         results = search(
             query=query,
             index=search_index,
-            html_file=html_file_path,
-            sections_file=sections_file_path,
-            limit=5,
+            markdown_file=markdown_file_path,
+            limit=5,  # Ограничиваем до 5 результатов по требованию
         )
 
         # Логируем результаты с score

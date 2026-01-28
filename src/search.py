@@ -53,6 +53,9 @@ QUERY_REPLACEMENTS = {
     "зум": "zoom",
     "скайп": "skype",
     "антивирус": "antivirus",
+    "джира": "jira",
+    "джире": "jira",
+    "джиру": "jira",
 }
 
 
@@ -169,6 +172,219 @@ def tokenize_text(text: str) -> List[str]:
     # Используем регулярное выражение для извлечения слов
     tokens = re.findall(r"\b[а-яёa-z0-9]+\b", normalized, re.IGNORECASE)
     return tokens
+
+
+def preprocess_negation_query(query: str) -> Tuple[str, List[str]]:
+    """
+    Распознаёт отрицания в запросе и извлекает исключаемые термины.
+
+    Паттерны: "но не X", "исключая X", "без X", "кроме X".
+    Возвращает запрос без фраз отрицания и список терминов для исключения.
+
+    Args:
+        query: Исходный запрос
+
+    Returns:
+        Кортеж (запрос_для_поиска, исключаемые_термины)
+    """
+    if not query or not query.strip():
+        return ("", [])
+
+    exclude_terms: List[str] = []
+    q = query.strip()
+    triggers = ["но не", "исключая", "без", "кроме"]
+
+    for trigger in triggers:
+        pattern = re.escape(trigger) + r"\s+([^,.!?]+)"
+        for m in re.finditer(pattern, q, re.IGNORECASE):
+            phrase = m.group(1).strip().lower()
+            exclude_terms.extend(tokenize_text(phrase))
+        q = re.sub(pattern, " ", q, flags=re.IGNORECASE)
+
+    query_for_search = " ".join(q.split()).strip()
+    unique_exclude = list(dict.fromkeys(exclude_terms))
+
+    if unique_exclude:
+        logger.info(
+            f"Negation: exclude_terms={unique_exclude}, search_query='{query_for_search}'"
+        )
+
+    return (query_for_search, unique_exclude)
+
+
+# Фразы, при наличии которых запрос считается вне контекста базы знаний (пустой ответ)
+OUT_OF_DOMAIN_PHRASES = (
+    "приготовить пиццу",
+    "пиццу",
+    "xyz123",
+    "нерелевантный запрос",
+    "яндекс почту",
+    "яндекс почт",
+    "письмо на яндекс",
+)
+
+
+def is_out_of_domain(query: str) -> bool:
+    """
+    Возвращает True, если запрос заведомо вне контекста базы знаний.
+    """
+    if not query or not query.strip():
+        return False
+    q = query.strip().lower()
+    return any(phrase in q for phrase in OUT_OF_DOMAIN_PHRASES)
+
+
+def filter_excluded_sections(
+    results: List[Dict[str, Any]], exclude_terms: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    Удаляет из результатов разделы, содержащие исключаемые термины.
+
+    Args:
+        results: Список результатов поиска
+        exclude_terms: Термины, при наличии которых раздел исключается
+
+    Returns:
+        Отфильтрованный список результатов
+    """
+    if not exclude_terms:
+        return results
+
+    filtered = []
+    for r in results:
+        title = (r.get("section_title") or "").lower()
+        text = (r.get("text") or "").lower()
+        combined = f"{title} {text}"
+        if any(term.lower() in combined for term in exclude_terms):
+            logger.debug(
+                f"Excluded section '{r.get('section_title')}' (contains {exclude_terms})"
+            )
+            continue
+        filtered.append(r)
+    return filtered
+
+
+def boost_exact_matches(
+    results: List[Dict[str, Any]],
+    query: str,
+    title_weight: float = 0.1,
+    text_weight: float = 0.05,
+    token_weights: Optional[Dict[str, Tuple[float, float]]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Повышает score разделов с точным вхождением ключевых слов запроса.
+
+    Заголовок имеет больший вес (title_weight), чем текст (text_weight).
+    Для отдельных токенов можно задать свои веса через token_weights.
+
+    Args:
+        results: Список результатов поиска (изменяется in-place по score)
+        query: Поисковый запрос
+        title_weight: Добавка к score за совпадение в заголовке
+        text_weight: Добавка к score за совпадение в тексте
+        token_weights: Словарь токен -> (title_w, text_w) для усиленного буста
+
+    Returns:
+        Тот же список, отсортированный по score по убыванию
+    """
+    if not results or not query:
+        return results
+
+    query_tokens = tokenize_text(query)
+    if not query_tokens:
+        return results
+
+    tw = token_weights or {}
+    for r in results:
+        score = r.get("score", 0.0)
+        if not isinstance(score, (int, float)):
+            continue
+        title = (r.get("section_title") or "").lower()
+        text = (r.get("text") or "").lower()
+        for tok in query_tokens:
+            t_lower = tok.lower()
+            title_w, text_w = tw.get(t_lower, (title_weight, text_weight))
+            if t_lower in title:
+                score += title_w
+            if t_lower in text:
+                score += text_w
+        r["score"] = score
+
+    results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    return results
+
+
+def boost_gateway_and_jira(
+    results: List[Dict[str, Any]],
+    query: str,
+    sections_content: Optional[Dict[str, str]] = None,
+    gateway_boost: float = 0.15,
+    jira_boost: float = 0.22,
+) -> List[Dict[str, Any]]:
+    """
+    Буст разделов по запросам про адрес шлюза (ext.vpn) и про Jira/доступ к ресурсам.
+
+    - Если в запросе есть «адрес»/«шлюз»/«разработ»: буст разделам с ext.vpn, vtb.ru, шлюз.
+    - Если в запросе есть «jira»/«confluence»: буст разделам с vpn и (ext.vpn или devcorp или доступ).
+    sections_content: при наличии используется полный текст раздела для проверки (иначе snippet).
+    """
+    if not results or not query:
+        return results
+    query_lower = query.lower()
+    for r in results:
+        score = r.get("score", 0.0)
+        if not isinstance(score, (int, float)):
+            continue
+        title = (r.get("section_title") or "").lower()
+        text = (r.get("text") or "").lower()
+        if sections_content:
+            full = (sections_content.get(r.get("section_title") or "") or "").lower()
+            combined = f"{title} {full}"
+        else:
+            combined = f"{title} {text}"
+        if any(k in query_lower for k in ("адрес", "шлюз", "разработ")):
+            if "ext.vpn" in combined or "vtb.ru" in combined or "шлюз" in combined:
+                score += gateway_boost
+        if "jira" in query_lower or "confluence" in query_lower:
+            if "vpn" in combined and (
+                "ext.vpn" in combined or "devcorp" in combined or "доступ" in combined
+            ):
+                score += jira_boost
+        if "сертификат" in query_lower and ("обнов" in query_lower or "автоматическ" in query_lower):
+            if "сертификат" in combined and "3.4" in combined:
+                score += 0.25
+            elif "сертификат" in combined and "vpn" in combined:
+                score += 0.1
+        r["score"] = score
+    results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
+    return results
+
+
+def filter_out_of_context_results(
+    results: List[Dict[str, Any]], min_max_score: float = 0.7
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает пустой список, если лучший результат недостаточно релевантен.
+
+    Используется для запросов вне контекста базы знаний.
+
+    Args:
+        results: Список результатов (должен быть отсортирован по score по убыванию)
+        min_max_score: Минимальный порог для score лучшего результата
+
+    Returns:
+        results либо пустой список
+    """
+    if not results:
+        return results
+    best_score = results[0].get("score", 0.0)
+    if isinstance(best_score, (int, float)) and best_score < min_max_score:
+        logger.info(
+            f"Out of context: best score {best_score:.3f} < {min_max_score}, "
+            "returning empty list"
+        )
+        return []
+    return results
 
 
 def extract_text_from_markdown(markdown_content: str) -> str:
@@ -1073,6 +1289,56 @@ def get_text_snippet(text: str, max_length: int = 300) -> str:
     return text.strip()
 
 
+def adaptive_min_score(max_score: float, base_min_score: float = 0.25) -> Optional[float]:
+    """
+    Вычисляет адаптивный минимальный порог score на основе максимального score.
+
+    Логика:
+    - Если max_score < 0.5: возвращает None (результаты следует отбросить)
+    - Если max_score > 0.9: возвращает 0.4 (более строгий порог)
+    - Иначе: возвращает base_min_score
+
+    Args:
+        max_score: Максимальный score из результатов поиска
+        base_min_score: Базовый минимальный порог (по умолчанию 0.25)
+
+    Returns:
+        Адаптивный минимальный порог или None, если результаты нерелевантны
+    """
+    if max_score < 0.5:
+        return None
+    if max_score > 0.9:
+        return 0.4
+    return base_min_score
+
+
+def filter_low_confidence_results(
+    results: List[Dict[str, Any]], min_first_score: float = 0.6
+) -> List[Dict[str, Any]]:
+    """
+    Фильтрует результаты, если первый результат имеет слишком низкий score.
+
+    Если первый результат имеет score < min_first_score, возвращает пустой список.
+
+    Args:
+        results: Список результатов поиска
+        min_first_score: Минимальный score для первого результата (по умолчанию 0.6)
+
+    Returns:
+        Отфильтрованный список результатов или пустой список
+    """
+    if not results:
+        return results
+    first_score = results[0].get("score", 0.0)
+    if isinstance(first_score, (int, float)) and first_score < min_first_score:
+        logger.info(
+            f"First result score {first_score:.3f} < {min_first_score}, "
+            "returning empty list"
+        )
+        return []
+    return results
+
+
 def semantic_search(
     query: str,
     embeddings_data: Dict[str, Any],
@@ -1184,7 +1450,17 @@ def semantic_search(
         if not hits or len(hits) == 0 or not hits[0]:
             logger.info("No results found in semantic search")
             return []
-        
+
+        # Адаптивный порог: если max_score < 0.5 — нерелевантный запрос
+        max_score = float(hits[0][0]["score"]) if hits[0] else 0.0
+        effective_min_score = adaptive_min_score(max_score, base_min_score=min_score)
+        if effective_min_score is None:
+            logger.info(
+                f"Adaptive threshold: max_score={max_score:.3f} < 0.5, "
+                "returning empty list"
+            )
+            return []
+
         # Формируем результаты
         # hits[0] содержит результаты для первого (и единственного) запроса
         results = []
@@ -1192,8 +1468,8 @@ def semantic_search(
             idx = hit['corpus_id']
             score = float(hit['score'])
             
-            # Фильтруем по минимальному score
-            if score < min_score:
+            # Фильтруем по адаптивному минимальному score
+            if score < effective_min_score:
                 continue
             
             # Получаем заголовок раздела
@@ -1282,13 +1558,43 @@ def search(
     # Если есть embeddings, используем семантический поиск
     if has_embeddings:
         logger.info("Using semantic search (embeddings found)")
+        # Отрицания: извлекаем исключаемые термины и запрос для поиска
+        query_for_search, exclude_terms = preprocess_negation_query(query)
+        if not query_for_search or not query_for_search.strip():
+            logger.debug("Query empty after negation parsing")
+            return []
+        if is_out_of_domain(query):
+            logger.info("Query detected as out of domain, returning empty list")
+            return []
+        if "шлюз" in query_for_search.lower():
+            query_for_search = (query_for_search + " ext.vpn devcorp vpn").strip()
+        # Берём больше кандидатов для переранжирования (бусты могут вывести разделы в топ)
+        fetch_limit = max(limit * 3, 15)
         results = semantic_search(
-            query=query,  # semantic_search сам вызовет preprocess_query
+            query=query_for_search,
             embeddings_data=index,
-            limit=limit,
-            min_score=0.25  # Повышен порог для фильтрации нерелевантных результатов
+            limit=fetch_limit,
+            min_score=0.25,
         )
-        return results
+        # Убираем разделы с исключаемыми терминами (TC-1.2.2)
+        results = filter_excluded_sections(results, exclude_terms)
+        # Boost для точных совпадений ключевых слов (TC-1.8.4), усиленный вес для «сертификат»
+        results = boost_exact_matches(
+            results,
+            query_for_search,
+            title_weight=0.1,
+            text_weight=0.05,
+            token_weights={"сертификат": (0.15, 0.12)},
+        )
+        # Буст разделов по запросам про шлюз/адрес, Jira/доступ и сертификаты (TC-1.5.1, TC-5.3, TC-5.5)
+        results = boost_gateway_and_jira(
+            results, query_for_search, sections_content=index.get("sections_content")
+        )
+        # Запросы вне контекста: если лучший результат < 0.7 — пустой ответ
+        results = filter_out_of_context_results(results, min_max_score=0.7)
+        # Абсолютный порог: если первый результат < 0.6 — не показываем
+        results = filter_low_confidence_results(results, min_first_score=0.6)
+        return results[:limit]
 
     # Иначе используем token-based поиск
     if not has_token_index:

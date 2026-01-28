@@ -17,7 +17,8 @@ if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
 
 # Добавляем корневую директорию в путь
-project_root = Path(__file__).parent
+# Скрипт может запускаться из корня: python testing/test_all_functions.py
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.config import load_config, get_google_docs_config
@@ -119,28 +120,24 @@ def test_vectorize_content():
     print("=" * 60)
     
     try:
-        html_file = project_root / "data" / "knowledge.html"
-        sections_file = project_root / "data" / "sections.json"
+        markdown_file = project_root / "data" / "knowledge.md"
+        # Проверяем также старый формат HTML для обратной совместимости
+        if not markdown_file.exists():
+            markdown_file = project_root / "data" / "knowledge.html"
         cache_file = project_root / "data" / "knowledge_cache.json"
         
         # Проверяем наличие файлов
-        if not html_file.exists():
-            print(f"[ERROR] ОШИБКА: HTML файл не найден: {html_file}")
+        if not markdown_file.exists():
+            print(f"[ERROR] ОШИБКА: Markdown/HTML файл не найден: {markdown_file}")
             print("   Сначала выполните тест загрузки контента (ТЕСТ 1)")
             return False
         
-        if not sections_file.exists():
-            print(f"[ERROR] ОШИБКА: Файл с разделами не найден: {sections_file}")
-            return False
-        
-        print(f"HTML файл: {html_file}")
-        print(f"Файл разделов: {sections_file}")
+        print(f"Markdown/HTML файл: {markdown_file}")
         print(f"Кэш: {cache_file}")
         
         # Векторизуем контент
         success = vectorize_content(
-            html_file=html_file,
-            sections_file=sections_file,
+            markdown_file=markdown_file,
             cache_file=cache_file
         )
         
@@ -187,8 +184,10 @@ def main():
     results.append(("Загрузка модели", test_download_model()))
     
     # Тест 3: Векторизация (только если контент загружен)
-    html_file = project_root / "data" / "knowledge.html"
-    if html_file.exists():
+    markdown_file = project_root / "data" / "knowledge.md"
+    if not markdown_file.exists():
+        markdown_file = project_root / "data" / "knowledge.html"
+    if markdown_file.exists():
         results.append(("Векторизация контента", test_vectorize_content()))
     else:
         print("\n[SKIP] Пропуск теста векторизации: контент не загружен")

@@ -6,7 +6,8 @@ import sys
 import json
 from pathlib import Path
 
-project_root = Path(__file__).parent
+# Скрипт может запускаться из корня: python testing/test_vectorize.py
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.logging import setup_logging, get_logger
@@ -22,27 +23,23 @@ def main():
     print("ТЕСТ: Векторизация контента")
     print("=" * 60)
     
-    html_file = project_root / "data" / "knowledge.html"
-    sections_file = project_root / "data" / "sections.json"
+    markdown_file = project_root / "data" / "knowledge.md"
+    # Проверяем также старый формат HTML для обратной совместимости
+    if not markdown_file.exists():
+        markdown_file = project_root / "data" / "knowledge.html"
     cache_file = project_root / "data" / "knowledge_cache.json"
     
-    if not html_file.exists():
-        print(f"[ERROR] HTML файл не найден: {html_file}")
+    if not markdown_file.exists():
+        print(f"[ERROR] Markdown/HTML файл не найден: {markdown_file}")
         print("   Сначала выполните: python test_import_content.py")
         return 1
     
-    if not sections_file.exists():
-        print(f"[ERROR] Файл с разделами не найден: {sections_file}")
-        return 1
-    
-    print(f"HTML файл: {html_file}")
-    print(f"Файл разделов: {sections_file}")
+    print(f"Markdown/HTML файл: {markdown_file}")
     print(f"Кэш: {cache_file}")
     print("\n[INFO] Векторизация может занять некоторое время...")
     
     success = vectorize_content(
-        html_file=html_file,
-        sections_file=sections_file,
+        markdown_file=markdown_file,
         cache_file=cache_file
     )
     

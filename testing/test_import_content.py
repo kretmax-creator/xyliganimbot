@@ -5,7 +5,8 @@
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent
+# Скрипт может запускаться из корня: python testing/test_import_content.py
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.config import load_config, get_google_docs_config
