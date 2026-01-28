@@ -249,7 +249,7 @@ def main() -> None:
                 logger.warning(
                     "Neither embeddings nor search index found in cache. "
                     "Bot will work, but search functionality will be limited. "
-                    "Use /admin vectorize to create embeddings or /admin import_content to create index."
+                    "Use /admin vectorize to create embeddings."
                 )
                 # Инициализируем с пустым индексом, чтобы бот мог работать
                 init_search_context(
