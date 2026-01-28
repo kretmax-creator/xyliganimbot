@@ -5,6 +5,7 @@
 к базе знаний и отправку результатов пользователю.
 """
 
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -38,6 +39,24 @@ def escape_html(text: str) -> str:
     text = text.replace('<', '&lt;')
     text = text.replace('>', '&gt;')
     return text
+
+
+def strip_bot_mention(text: str, bot_username: Optional[str]) -> str:
+    """
+    Удаляет упоминание бота (@username) из текста запроса.
+
+    Args:
+        text: Исходный текст сообщения
+        bot_username: Username бота без @ (из конфига)
+
+    Returns:
+        Текст без упоминания бота, с пробелами по краям убраны
+    """
+    if not text or not bot_username:
+        return (text or "").strip()
+    # Удаляем @username (без учёта регистра, как в Telegram)
+    cleaned = re.sub(r"@" + re.escape(bot_username) + r"\b", "", text, flags=re.IGNORECASE)
+    return cleaned.strip()
 
 
 def init_search_context(
@@ -197,15 +216,21 @@ async def send_search_response(
             logger.error(f"Error sending error message: {e2}", exc_info=True)
 
 
-async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_search_query(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    query: Optional[str] = None,
+) -> None:
     """
-    Обработчик текстовых сообщений как поисковых запросов.
+    Обработчик поисковых запросов (текст с упоминанием бота в группах или команда /search).
 
     Выполняет поиск по базе знаний и отправляет результаты пользователю.
 
     Args:
         update: Обновление от Telegram
         context: Контекст обработчика
+        query: Текст запроса (если передан, например из /search); иначе берётся из message.text
+               с удалением упоминания бота
     """
     user = update.effective_user
     chat = update.effective_chat
@@ -215,8 +240,11 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.warning("Received message without user, chat or message")
         return
 
-    query = message.text
-    if not query or not query.strip():
+    if query is None:
+        bot_username = context.bot_data.get("bot_username") if context else None
+        query = strip_bot_mention(message.text or "", bot_username)
+
+    if not query:
         logger.debug("Empty query received")
         try:
             await message.reply_text("Пожалуйста, введите поисковый запрос.")

@@ -1,20 +1,10 @@
 # Конфигурация xyliganimbot
 
-# Ссылка на Google Docs документ
-google_docs:
-  url: "https://docs.google.com/document/d/YOUR_DOCUMENT_ID/edit"
-  # Или используйте document_id для работы через API
-  # document_id: "YOUR_DOCUMENT_ID"
-
-# Белый список пользователей (telegram_id)
-# Пользователи из этого списка могут использовать бота
-users:
-  allowed:
-    - 123456789  # Пример ID пользователя
-    # Добавьте свои telegram_id
+# Username бота в Telegram (без @), для фильтрации упоминаний в групповых чатах
+bot_username: "xyliganim_bot"
 
 # Белый список чатов (chat_id)
-# Бот работает только в чатах из этого списка
+# Бот работает только в чатах из этого списка. Участники чата обрабатываются автоматически.
 chats:
   allowed:
     - -1001234567890  # Пример ID группового чата (отрицательный для групп)

@@ -24,10 +24,11 @@ from src.config import (
     validate_config,
     get_whitelists,
     get_logging_config,
+    get_bot_username,
 )
 from src.logging import setup_logging, get_logger, get_audit_logger
 from src.search import load_index_from_cache, load_embeddings_from_cache
-from src.handlers import handle_help_command, handle_search_query, init_search_context
+from src.handlers import handle_help_command, handle_admin_command, handle_search_query, init_search_context
 
 # Логгеры будут инициализированы после setup_logging()
 logger = None
@@ -37,27 +38,21 @@ audit_logger = None
 whitelists: Dict[str, List[int]] = {}
 
 
-def is_user_allowed(user_id: int, chat_id: int) -> bool:
+def is_chat_allowed(chat_id: int) -> bool:
     """
-    Проверяет, разрешен ли доступ пользователю и чату.
+    Проверяет, разрешён ли доступ чату.
+
+    Белый список только для чатов: если пользователь в разрешённом чате,
+    его команды обрабатываются (кроме админских — те только для admins).
 
     Args:
-        user_id: Telegram ID пользователя
         chat_id: Telegram ID чата
 
     Returns:
-        True если доступ разрешен, False иначе
+        True если чат в белом списке, False иначе
     """
-    users = whitelists.get("users", [])
     chats = whitelists.get("chats", [])
-
-    # Проверяем, есть ли пользователь в белом списке
-    user_allowed = not users or user_id in users
-
-    # Проверяем, есть ли чат в белом списке
-    chat_allowed = not chats or chat_id in chats
-
-    return user_allowed and chat_allowed
+    return not chats or chat_id in chats
 
 
 def is_admin(user_id: int) -> bool:
@@ -92,7 +87,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
         logger.warning("Received update without user or chat")
         return False
 
-    if not is_user_allowed(user.id, chat.id):
+    if not is_chat_allowed(chat.id):
         logger.warning(
             f"Access denied: user_id={user.id}, username={user.username}, "
             f"chat_id={chat.id}, chat_type={chat.type}"
@@ -102,17 +97,19 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     return True
 
 
-def create_application(token: str) -> Application:
+def create_application(token: str, bot_username: str) -> Application:
     """
     Создает и настраивает приложение Telegram-бота.
 
     Args:
         token: Токен Telegram-бота
+        bot_username: Username бота (без @) из конфига, для фильтра упоминаний
 
     Returns:
         Настроенное приложение
     """
     application = Application.builder().token(token).build()
+    application.bot_data["bot_username"] = bot_username
 
     # Регистрация обработчика команды /help
     async def help_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -121,15 +118,52 @@ def create_application(token: str) -> Application:
 
     application.add_handler(CommandHandler("help", help_wrapper))
 
-    # Регистрация обработчика текстовых сообщений (поисковые запросы)
+    # Регистрация обработчика команды /admin (только для администраторов)
+    async def admin_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await check_access(update, context):
+            return
+        user = update.effective_user
+        if not user:
+            logger.warning("Received /admin command without user")
+            return
+        if not is_admin(user.id):
+            try:
+                await update.message.reply_text("Команда доступна только администраторам.")
+            except Exception as e:
+                logger.error(f"Error sending admin refusal: {e}", exc_info=True)
+            logger.warning(f"Admin command denied for user_id={user.id}, username={user.username}")
+            return
+        await handle_admin_command(update, context)
+
+    application.add_handler(CommandHandler("admin", admin_wrapper))
+
+    # Поиск: в группах — только при упоминании бота; в личке — только по команде /search
     async def search_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if await check_access(update, context):
             await handle_search_query(update, context)
 
-    # Обрабатываем только текстовые сообщения
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, search_wrapper)
+    # В групповых чатах — только сообщения с упоминанием бота
+    search_filter_groups = (
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS & filters.Mention(bot_username)
     )
+    application.add_handler(MessageHandler(search_filter_groups, search_wrapper))
+
+    # Команда /search — для личных чатов и по желанию в группах
+    async def search_cmd_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await check_access(update, context):
+            return
+        query = " ".join(context.args).strip() if context.args else ""
+        if not query:
+            try:
+                await update.message.reply_text(
+                    "Используйте: /search ваш запрос\nНапример: /search как настроить VPN"
+                )
+            except Exception as e:
+                logger.error(f"Error sending /search hint: {e}", exc_info=True)
+            return
+        await handle_search_query(update, context, query=query)
+
+    application.add_handler(CommandHandler("search", search_cmd_wrapper))
 
     return application
 
@@ -178,8 +212,7 @@ def main() -> None:
 
         logger.info("Starting xyliganimbot...")
         logger.info(
-            f"Whitelists loaded: {len(whitelists.get('users', []))} users, "
-            f"{len(whitelists.get('chats', []))} chats, "
+            f"Whitelists loaded: {len(whitelists.get('chats', []))} chats, "
             f"{len(whitelists.get('admins', []))} admins"
         )
 
@@ -270,7 +303,8 @@ def main() -> None:
 
     try:
         # Создание приложения
-        application = create_application(token)
+        bot_username = get_bot_username(config)
+        application = create_application(token, bot_username)
 
         # Запуск long polling
         logger.info("Bot started, waiting for messages...")

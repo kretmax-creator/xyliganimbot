@@ -88,14 +88,11 @@ def validate_config(config: Dict[str, Any], secrets: Dict[str, Optional[str]]) -
     if not secrets.get("TELEGRAM_BOT_TOKEN"):
         errors.append("TELEGRAM_BOT_TOKEN not set in environment variables")
 
-    # Проверка белых списков
-    users = config.get("users", {}).get("allowed", [])
+    # Проверка белого списка чатов (доступ только по чатам)
     chats = config.get("chats", {}).get("allowed", [])
 
-    if not users and not chats:
-        errors.append(
-            "At least one user or chat must be in whitelist (users.allowed or chats.allowed)"
-        )
+    if not chats:
+        errors.append("At least one chat must be in whitelist (chats.allowed)")
 
     if errors:
         error_message = "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -106,29 +103,37 @@ def get_whitelists(config: Dict[str, Any]) -> Dict[str, List[int]]:
     """
     Извлекает белые списки из конфигурации.
 
-    Args:
-        config: Словарь с конфигурацией
+    Доступ проверяется только по чату: если чат в списке, команды всех участников
+    обрабатываются (кроме админских — те только для пользователей из admins).
 
     Returns:
         Словарь с ключами:
-        - "users": список telegram_id пользователей
         - "chats": список chat_id чатов
         - "admins": список telegram_id администраторов
     """
-    users = config.get("users", {}).get("allowed", [])
     chats = config.get("chats", {}).get("allowed", [])
     admins = config.get("admins", [])
 
-    # Преобразуем в списки целых чисел
-    users_list = [int(uid) for uid in users] if users else []
     chats_list = [int(cid) for cid in chats] if chats else []
     admins_list = [int(aid) for aid in admins] if admins else []
 
     return {
-        "users": users_list,
         "chats": chats_list,
         "admins": admins_list,
     }
+
+
+def get_bot_username(config: Dict[str, Any]) -> str:
+    """
+    Извлекает username бота из конфигурации (без @).
+
+    Используется для фильтрации упоминаний в групповых чатах и удаления
+    упоминания из текста запроса.
+
+    Returns:
+        Username бота, по умолчанию "xyliganim_bot"
+    """
+    return (config.get("bot_username") or "xyliganim_bot").strip().lstrip("@")
 
 
 def get_logging_config(config: Dict[str, Any]) -> Dict[str, Any]:
