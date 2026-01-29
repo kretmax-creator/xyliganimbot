@@ -14,5 +14,6 @@ html2text>=2020.1.16
 
 # Embedding models для семантического поиска
 sentence-transformers>=2.2.0
-torch>=2.0.0
+# torch: не указываем здесь. В Docker ставится CPU-only сборка (см. Dockerfile).
+# Локально: pip сам подтянет torch через sentence-transformers (по умолчанию CUDA-сборка с PyPI).
 

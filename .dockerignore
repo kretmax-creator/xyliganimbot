@@ -1,0 +1,49 @@
+# Модели — загружаются вручную в models/ вне образа
+models/
+
+# Данные и логи — монтируются при запуске
+data/*.md
+data/*.json
+data/*.html
+data/images/
+logs/
+*.log
+
+# Git и окружение
+.git
+.gitignore
+.env
+.env.local
+.env.example
+config.yaml
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv
+.venv
+env
+ENV
+*.egg-info
+.eggs
+dist
+build
+
+# IDE, курсор, тесты, лишняя документация
+.cursor
+.cursorignore
+.idea
+.vscode
+testing/
+docs/
+*.md
+!README.md
+
+# Служебное
+PROMPT_FOR_NEXT_AGENT.md
+.DS_Store
+Thumbs.db
+k8s/
