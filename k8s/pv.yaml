@@ -4,6 +4,7 @@ metadata:
   name: xyliganimbot-data-pv
   labels:
     type: local
+    usage: data  # Уникальная метка для привязки
 spec:
   storageClassName: manual
   capacity:
@@ -19,6 +20,7 @@ metadata:
   name: xyliganimbot-logs-pv
   labels:
     type: local
+    usage: logs  # Уникальная метка для привязки
 spec:
   storageClassName: manual
   capacity:
@@ -34,6 +36,7 @@ metadata:
   name: xyliganimbot-models-pv
   labels:
     type: local
+    usage: models  # Уникальная метка для привязки
 spec:
   storageClassName: manual
   capacity:

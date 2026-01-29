@@ -13,22 +13,22 @@ data:
     # Белый список чатов (chat_id)
     chats:
       allowed:
-        - -1001234567890
+        - -1003637228969
     
     # Белый список администраторов (telegram_id)
     admins:
-      - 123456789
+      - 264754413
     
     # Настройки логирования
     logging:
       level: "INFO"
       file: "logs/app.log"
       audit_file: "logs/audit.log"
-      log_user_messages: false
+      log_user_messages: true
       max_bytes: 10485760
       backup_count: 5
     
     # Настройки обновления кэша
     cache:
       update_interval_days: 7
-      auto_update: true
+      auto_update: false
