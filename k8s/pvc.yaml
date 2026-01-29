@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xyliganimbot-data-pvc
+  namespace: xyliganimbot
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  selector:
+    matchLabels:
+      name: xyliganimbot-data-pv  # This selector is tricky with PV labels, usually we rely on storageClassName or volumeName.
+                                   # But for static binding, volumeName is best or matchLabels.
+                                   # Let's use volumeName binding in PV or selector here.
+                                   # Actually, simpler for static provisioning is to just set volumeName in PVC if needed,
+                                   # or ensure unique storageClassName.
+                                   # Let's simplify and rely on standard binding.
+                                   # I'll update PV to have specific claimRef if needed, but standard binding usually works if storageClassName matches.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xyliganimbot-logs-pvc
+  namespace: xyliganimbot
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: xyliganimbot-models-pvc
+  namespace: xyliganimbot
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi

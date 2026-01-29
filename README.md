@@ -123,6 +123,88 @@ docker run -d --name xyliganimbot \
 
 Модель в `models/` загружается администратором вручную (или через `/admin load_model` при наличии сети). При сборке образа модели не используются.
 
+## Запуск в Kubernetes
+
+Инструкция для развертывания в кластере Kubernetes (тестовый кластер на VirtualBox с containerd).
+
+### 1. Подготовка образа
+
+Поскольку используется containerd, образ нужно собрать, экспортировать в tar и импортировать в containerd на каждом узле.
+
+**На машине разработки (где есть исходный код):**
+
+```bash
+cd /home/test/shared/xyliganimbot
+
+# Сборка образа
+docker build -t xyliganimbot:latest .
+
+# Сохранение образа в tar (в общую папку)
+docker save xyliganimbot:latest -o xyliganimbot-latest.tar
+```
+
+**На каждом узле Kubernetes (Master, Node1, Node2):**
+
+```bash
+# Импорт образа в containerd (namespace k8s.io)
+sudo ctr -n k8s.io images import /home/test/shared/xyliganimbot/xyliganimbot-latest.tar
+
+# Проверка
+sudo ctr -n k8s.io images list | grep "xyliganimbot"
+```
+
+### 2. Применение манифестов
+
+Манифесты находятся в папке `k8s/`. Перед применением убедитесь, что файлы `config.yaml` и секреты настроены.
+
+1.  **Создайте namespace:**
+    ```bash
+    kubectl apply -f k8s/namespace.yaml
+    ```
+
+2.  **Настройте PersistentVolumes:**
+    Убедитесь, что пути в `k8s/pv.yaml` (`/home/test/shared/xyliganimbot/...`) соответствуют путям на ваших узлах.
+    ```bash
+    kubectl apply -f k8s/pv.yaml
+    kubectl apply -f k8s/pvc.yaml
+    ```
+
+3.  **Создайте ConfigMap:**
+    Сначала отредактируйте `k8s/configmap.yaml` (или создайте его на основе `config.yaml`):
+    ```bash
+    kubectl apply -f k8s/configmap.yaml
+    ```
+
+4.  **Создайте Secret:**
+    Создайте файл `k8s/secret.yaml` на основе `k8s/secret.yaml.template`, заполнив base64-кодированными значениями, ИЛИ создайте секрет командой (проще):
+    ```bash
+    # Загрузим переменные из .env файла и создадим секрет
+    # (предполагается, что .env заполнен)
+    kubectl create secret generic xyliganimbot-secrets \
+      --namespace=xyliganimbot \
+      --from-env-file=.env
+    ```
+
+5.  **Запустите приложение (Deployment):**
+    ```bash
+    kubectl apply -f k8s/deployment.yaml
+    ```
+
+### 3. Проверка статуса
+
+```bash
+kubectl get pods -n xyliganimbot
+kubectl logs -f deployment/xyliganimbot -n xyliganimbot
+```
+
+### 4. Обновление приложения
+
+После пересборки и повторного импорта образа (см. шаг 1):
+
+```bash
+kubectl rollout restart deployment xyliganimbot -n xyliganimbot
+```
+
 ## Конфигурация
 
 Основная конфигурация находится в `config.yaml`. Секретные данные (токены, ключи) настраиваются через переменные окружения в файле `.env`.

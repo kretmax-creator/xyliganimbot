@@ -380,20 +380,20 @@
 ---
 
 ### Итерация 13: Kubernetes манифесты
-**День 13**
+**День 13** ✅
 
 **Цель**: Создать манифесты для развертывания в Kubernetes.
 
 **Задачи**:
-- [ ] Создать `k8s/namespace.yaml`
-- [ ] Создать `k8s/deployment.yaml`
-- [ ] Создать `k8s/service.yaml` (если требуется)
-- [ ] Создать `k8s/configmap.yaml` для конфигурации
-- [ ] Создать `k8s/secret.yaml.template` для секретов
-- [ ] Создать `k8s/persistent-volume.yaml` и `k8s/persistent-volume-claim.yaml` для логов и кэша
-- [ ] Добавить инструкции по развертыванию в `README.md`
+- [x] Создать `k8s/namespace.yaml`
+- [x] Создать `k8s/deployment.yaml`
+- [ ] Создать `k8s/service.yaml` (если требуется) - *не требуется (бот работает через исходящие запросы)*
+- [x] Создать `k8s/configmap.yaml` для конфигурации
+- [x] Создать `k8s/secret.yaml.template` для секретов
+- [x] Создать `k8s/persistent-volume.yaml` и `k8s/persistent-volume-claim.yaml` для логов и кэша
+- [x] Добавить инструкции по развертыванию в `README.md`
 
-**Результат**: Готовые манифесты для развертывания в Kubernetes.
+**Результат**: Готовые манифесты для развертывания в Kubernetes в папке `k8s/`. Обновлен `README.md` с инструкциями по сборке образа, импорту в containerd и развертыванию. Для PersistentVolumes используется `hostPath` на общую папку `/home/test/shared/xyliganimbot`.
 
 ---
 

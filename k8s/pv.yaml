@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: xyliganimbot-data-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: "/home/test/shared/xyliganimbot/data"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: xyliganimbot-logs-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: "/home/test/shared/xyliganimbot/logs"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: xyliganimbot-models-pv
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: "/home/test/shared/xyliganimbot/models"

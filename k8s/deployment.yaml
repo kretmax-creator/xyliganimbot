@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xyliganimbot
+  namespace: xyliganimbot
+  labels:
+    app: xyliganimbot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xyliganimbot
+  template:
+    metadata:
+      labels:
+        app: xyliganimbot
+    spec:
+      containers:
+      - name: xyliganimbot
+        image: xyliganimbot:latest
+        imagePullPolicy: IfNotPresent  # Используем локальный образ, если он есть
+        envFrom:
+        - secretRef:
+            name: xyliganimbot-secrets
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+        - name: logs-volume
+          mountPath: /app/logs
+        - name: models-volume
+          mountPath: /app/models
+        - name: config-volume
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: xyliganimbot-data-pvc
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: xyliganimbot-logs-pvc
+      - name: models-volume
+        persistentVolumeClaim:
+          claimName: xyliganimbot-models-pvc
+      - name: config-volume
+        configMap:
+          name: xyliganimbot-config

@@ -45,8 +45,13 @@ logs/*.log.*
 # Data
 data/*.md
 data/*.json
+data/*.html
+data/*.7z
+data/images/
 !data/.gitkeep
-!data/sections.json
+
+# Models
+models/
 
 # Kubernetes secrets
 k8s/secret.yaml
