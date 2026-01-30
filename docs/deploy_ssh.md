@@ -76,6 +76,8 @@ kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/pv.yaml
 kubectl apply -f k8s/pvc.yaml
 kubectl apply -f k8s/configmap.yaml
+# Секреты: не коммитить заполненный secret. Используйте template (k8s/secret.yaml.template),
+# подставьте значения при деплое, например из .env:
 kubectl create secret generic xyliganimbot-secrets --namespace=xyliganimbot --from-env-file=.env
 kubectl apply -f k8s/deployment.yaml
 ```

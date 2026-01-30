@@ -1,20 +1,19 @@
 # Telegram Bot API
-python-telegram-bot>=20.0
+python-telegram-bot==21.7
 
 # Google Docs API
-google-api-python-client>=2.0.0
-google-auth>=2.0.0
+google-api-python-client==2.148.0
+google-auth==2.36.0
 
 # Конфигурация
-pyyaml>=6.0
+pyyaml==6.0.2
 
 # Утилиты
-python-dotenv>=1.0.0
-html2text>=2020.1.16
-pyspellchecker>=0.7.0
+python-dotenv==1.0.1
+html2text==2020.1.16
+pyspellchecker==0.7.0
 
 # Embedding models для семантического поиска
-sentence-transformers>=2.2.0
+sentence-transformers==2.2.2
 # torch: не указываем здесь. В Docker ставится CPU-only сборка (см. Dockerfile).
 # Локально: pip сам подтянет torch через sentence-transformers (по умолчанию CUDA-сборка с PyPI).
-

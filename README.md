@@ -26,8 +26,14 @@ Telegram-бот для поиска ответов в базе знаний (д�
    ```bash
    pip install -r requirements.txt
    ```
+   Проверка уязвимостей зависимостей: `pip install pip-audit && pip-audit`.
 4. Скопируйте `.env.example` в `.env` и заполните необходимые переменные
 5. Скопируйте `config.yaml.example` в `config.yaml` и настройте конфигурацию
+
+### Секреты и конфигурация
+
+- **Не коммитьте** файлы с реальными секретами (`.env` с токенами, заполненный `k8s/secret.yaml`). В репозитории только шаблоны: `.env.example`, `k8s/secret.yaml.template`. При деплое подставляйте значения вручную или через CI (например, `kubectl create secret ... --from-env-file=.env`).
+- **Docker-образ** содержит только пример конфига (`config.yaml.example` → `config.yaml` в образе). Секреты и продакшен-конфиг передаются только через переменные окружения (Docker: `--env-file`, Kubernetes: Secret + ConfigMap).
 
 ## Запуск
 
@@ -216,8 +222,6 @@ kubectl rollout restart deployment xyliganimbot -n xyliganimbot
 - Админские (только для пользователей из `admins` в конфиге):
   - `/admin load_model` — загрузка embedding-модели в `models/`
   - `/admin vectorize` — векторизация контента и сохранение в кэш
-
-Подробнее: `docs/commands.md`. Импорт контента из Google Docs — отдельным скриптом (`python testing/test_import_content.py`), не командой бота.
 
 ## Структура проекта
 

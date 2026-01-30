@@ -15,13 +15,28 @@ spec:
       labels:
         app: xyliganimbot
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
       - name: xyliganimbot
         image: xyliganimbot:latest
         imagePullPolicy: IfNotPresent  # Используем локальный образ, если он есть
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
         envFrom:
         - secretRef:
             name: xyliganimbot-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
         volumeMounts:
         - name: data-volume
           mountPath: /app/data

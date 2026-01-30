@@ -5,6 +5,7 @@
 через long polling и обработку команд и сообщений.
 """
 
+import signal
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -311,13 +312,13 @@ def main() -> None:
                 )
 
     except FileNotFoundError as e:
-        print(f"Error: {e}")
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     except ValueError as e:
-        print(f"Error: {e}")
+        sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     except Exception as e:
-        print(f"Error loading configuration: {e}")
+        sys.stderr.write(f"Error loading configuration: {e}\n")
         sys.exit(1)
 
     try:
@@ -325,6 +326,15 @@ def main() -> None:
         bot_username = get_bot_username(config)
         application = create_application(token, bot_username)
         application.bot_data["log_user_messages"] = logging_config["log_user_messages"]
+
+        # Graceful shutdown по SIGTERM (k8s rolling update) и SIGINT
+        def _shutdown(signum: int, frame: Optional[Any]) -> None:
+            sig_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
+            logger.info("Received %s, shutting down gracefully...", sig_name)
+            application.stop()
+
+        signal.signal(signal.SIGTERM, _shutdown)
+        signal.signal(signal.SIGINT, _shutdown)
 
         # Запуск long polling
         logger.info("Bot started, waiting for messages...")
@@ -336,7 +346,6 @@ def main() -> None:
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Error running bot: {e}", exc_info=True)
-        print(f"Error: {e}")
         sys.exit(1)
 
 

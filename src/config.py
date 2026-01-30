@@ -80,7 +80,7 @@ def validate_config(config: Dict[str, Any], secrets: Dict[str, Optional[str]]) -
         secrets: Словарь с секретами из переменных окружения
 
     Raises:
-        ValueError: Если отсутствуют обязательные параметры
+        ValueError: Если отсутствуют обязательные параметры или типы неверны
     """
     errors = []
 
@@ -90,9 +90,27 @@ def validate_config(config: Dict[str, Any], secrets: Dict[str, Optional[str]]) -
 
     # Проверка белого списка чатов (доступ только по чатам)
     chats = config.get("chats", {}).get("allowed", [])
-
-    if not chats:
+    if not isinstance(chats, list):
+        errors.append("chats.allowed must be a list")
+    elif not chats:
         errors.append("At least one chat must be in whitelist (chats.allowed)")
+    else:
+        for i, cid in enumerate(chats):
+            try:
+                int(cid)
+            except (TypeError, ValueError):
+                errors.append(f"chats.allowed[{i}] must be an integer (chat_id), got {type(cid).__name__}")
+
+    # Проверка списка админов (должен быть список чисел или пустой)
+    admins = config.get("admins", [])
+    if not isinstance(admins, list):
+        errors.append("admins must be a list")
+    else:
+        for i, aid in enumerate(admins):
+            try:
+                int(aid)
+            except (TypeError, ValueError):
+                errors.append(f"admins[{i}] must be an integer (telegram_id), got {type(aid).__name__}")
 
     if errors:
         error_message = "Configuration validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
