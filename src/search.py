@@ -56,13 +56,57 @@ QUERY_REPLACEMENTS = {
     "джира": "jira",
     "джире": "jira",
     "джиру": "jira",
+    "удаленка": "vrm",
+    "учетка": "учетная запись",
+    "пин": "pin",
 }
+
+# Термины проекта, которые не исправлять при проверке опечаток (включая слова из QUERY_REPLACEMENTS)
+DOMAIN_TERMS: Set[str] = {
+    "vpn", "outlook", "dion", "rutoken", "sfera", "virtualbox", "vrm",
+    "innotech", "devcorp", "region", "sakura", "dlp", "kes", "wifi",
+    "excel", "word", "office", "teams", "zoom", "skype", "antivirus", "jira",
+    "pin", "учетная", "запись",
+}
+
+
+def _fix_typos_in_query(text: str) -> str:
+    """
+    Исправляет опечатки в словах запроса. Не трогает слова из DOMAIN_TERMS.
+    Если pyspellchecker недоступен, возвращает текст без изменений.
+    """
+    try:
+        from spellchecker import SpellChecker
+    except ImportError:
+        return text
+    words = re.findall(r'[а-яёa-z0-9]+', text, re.IGNORECASE)
+    if not words:
+        return text
+    spell_ru = SpellChecker(language='ru')
+    spell_en = SpellChecker(language='en')
+    result = text
+    for word in words:
+        if len(word) < 3:
+            continue
+        w_lower = word.lower()
+        if w_lower in DOMAIN_TERMS:
+            continue
+        spell = spell_ru if re.search(r'[а-яё]', word, re.IGNORECASE) else spell_en
+        unknown = spell.unknown([word])
+        if word not in unknown:
+            continue
+        correction = spell.correction(word)
+        if correction and correction.lower() != w_lower:
+            pattern = r'\b' + re.escape(word) + r'\b'
+            result = re.sub(pattern, correction, result, flags=re.IGNORECASE)
+            logger.info(f"Spell correction: '{word}' -> '{correction}'")
+    return result
 
 
 def preprocess_query(query: str) -> str:
     """
-    Предобрабатывает поисковый запрос: заменяет синонимы и транслитерацию.
-    Фильтрует запросы, содержащие только специальные символы.
+    Предобрабатывает поисковый запрос: заменяет синонимы и транслитерацию,
+    при необходимости исправляет опечатки. Фильтрует запросы только из символов.
     
     Args:
         query: Исходный запрос
@@ -82,10 +126,12 @@ def preprocess_query(query: str) -> str:
     processed_query = query.lower()
     
     # Заменяем слова из словаря
-    # Используем word boundaries \b, чтобы не заменять части слов
     for ru_term, en_term in QUERY_REPLACEMENTS.items():
         pattern = r'\b' + re.escape(ru_term) + r'\b'
         processed_query = re.sub(pattern, en_term, processed_query)
+    
+    # Исправление опечаток только для слов вне доменного словаря
+    processed_query = _fix_typos_in_query(processed_query)
     
     if processed_query != query.lower():
         logger.info(f"Query preprocessed: '{query}' -> '{processed_query}'")
@@ -1289,6 +1335,23 @@ def get_text_snippet(text: str, max_length: int = 300) -> str:
     return text.strip()
 
 
+def _extract_pattern_types(text: str) -> Set[str]:
+    """
+    Извлекает типы паттернов из текста: URL, email, телефон, последовательности цифр.
+    Используется для boost ранжирования при запросах на точные факты.
+    """
+    types: Set[str] = set()
+    if re.search(r'https?://\S+', text):
+        types.add('url')
+    if re.search(r'[\w.-]+@[\w.-]+\.\w+', text):
+        types.add('email')
+    if re.search(r'\+?[\d\s\-()]{7,}', text):
+        types.add('phone')
+    if re.search(r'\d{4,}', text):
+        types.add('digits')
+    return types
+
+
 def adaptive_min_score(max_score: float, base_min_score: float = 0.25) -> Optional[float]:
     """
     Вычисляет адаптивный минимальный порог score на основе максимального score.
@@ -1494,6 +1557,16 @@ def semantic_search(
             # Ограничиваем количество результатов
             if len(results) >= limit:
                 break
+        
+        # Boost для точных фактов: если в запросе и в разделе есть одни и те же паттерны (URL, email, телефон, цифры)
+        query_patterns = _extract_pattern_types(processed_query)
+        if query_patterns:
+            for r in results:
+                section_text = sections_content.get(r["section_title"], "")
+                section_patterns = _extract_pattern_types(section_text)
+                if query_patterns & section_patterns:
+                    r["score"] = min(1.0, r["score"] * 1.2)
+            results.sort(key=lambda x: x["score"], reverse=True)
         
         scores_str = ", ".join([f"{r['score']:.3f}" for r in results[:3]])
         logger.info(
