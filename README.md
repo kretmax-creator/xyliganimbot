@@ -125,7 +125,7 @@ docker run -d --name xyliganimbot \
 
 ## Запуск в Kubernetes
 
-Инструкция для развертывания в кластере Kubernetes (тестовый кластер на VirtualBox с containerd).
+Инструкция для развертывания в кластере Kubernetes (тестовый кластер на VirtualBox с containerd). Команды выполняются на мастер-ноде (или по SSH: см. `docs/deploy_ssh.md`).
 
 ### 1. Подготовка образа
 
@@ -207,17 +207,17 @@ kubectl rollout restart deployment xyliganimbot -n xyliganimbot
 
 ## Конфигурация
 
-Основная конфигурация находится в `config.yaml`. Секретные данные (токены, ключи) настраиваются через переменные окружения в файле `.env`.
+Основная конфигурация — в `config.yaml` (см. пример `config.yaml.example`). Ключевые поля: `bot_username`, `chats.allowed`, `admins`, `logging`. Секреты (токен бота, ключи Google) задаются в `.env` (см. `.env.example`).
 
 ## Команды бота
 
-- `/help` — список доступных команд и описание работы бота
+- `/help` — справка и описание работы бота (в группе можно просто обратиться к боту с вопросом)
 - `/search запрос` — поиск в базе знаний (в личке); в группах — при упоминании бота
 - Админские (только для пользователей из `admins` в конфиге):
   - `/admin load_model` — загрузка embedding-модели в `models/`
   - `/admin vectorize` — векторизация контента и сохранение в кэш
 
-Импорт контента из Google Docs выполняется отдельным скриптом (`python testing/test_import_content.py`), не командой бота.
+Подробнее: `docs/commands.md`. Импорт контента из Google Docs — отдельным скриптом (`python testing/test_import_content.py`), не командой бота.
 
 ## Структура проекта
 
@@ -236,17 +236,22 @@ xyliganimbot/
 ├── logs/             # Логи приложения
 ├── docs/             # Документация
 ├── Dockerfile        # Образ для Docker
-└── k8s/              # Kubernetes манифесты
+├── k8s/              # Kubernetes манифесты
+├── CHANGELOG.md      # История изменений
+└── ...
 ```
 
 ## Документация
 
-Подробная документация находится в папке `docs/`:
-- `docs/idea.md` — описание идеи проекта
+Подробная документация в папке `docs/`:
+- `docs/idea.md` — идея проекта
 - `docs/vision.md` — техническое видение
+- `docs/commands.md` — команды бота
+- `docs/deploy_ssh.md` — развертывание через SSH
 - `docs/tasklist_v0.1.md` — план разработки
-- `docs/BACKLOG.md` — бэклог задач
-- `docs/TESTING.md` — план тестирования
+- `docs/BACKLOG.md` — бэклог
+- `docs/diagrams/` — диаграммы (Mermaid)
+- `testing/` — чек-листы и отчёты тестирования
 
 ## Лицензия
 

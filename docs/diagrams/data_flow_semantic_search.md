@@ -2,6 +2,8 @@
 
 Диаграмма показывает потоки данных в системе с использованием семантического поиска через embedding-модели.
 
+**Ревью (итерация 15):** Схемы актуальны. Уточнения: используется **Markdown** (`data/knowledge.md`, `parse_markdown_sections`, `build_embeddings_from_markdown`); модель — `intfloat/multilingual-e5-small`. Импорт документа выполняется **отдельным скриптом** вне бота (не командой бота).
+
 ## Поток данных при запуске бота
 
 ```mermaid
@@ -30,23 +32,6 @@ flowchart TD
     style Start fill:#ccffcc
     style LoadModel fill:#ffffcc
     style WaitMessages fill:#ccccff
-```
-
-## Поток данных при импорте документа
-
-```mermaid
-flowchart TD
-    Start([Импорт документа]) --> FetchDoc[fetch_document_zip<br/>Скачивание ZIP-архива]
-    FetchDoc --> ExtractFiles[extract_files_from_zip<br/>Распаковка архива]
-    ExtractFiles --> ParseSections[parse_html_sections<br/>Разделение на разделы]
-    
-    ParseSections --> Vectorize[vectorize_sections<br/>Векторизация разделов]
-    Vectorize --> SaveCache[save_embeddings_to_cache<br/>Сохранение векторов в кэш]
-    
-    SaveCache --> End([Импорт завершен])
-    
-    style Vectorize fill:#ffffcc
-    style SaveCache fill:#ccffcc
 ```
 
 ## Поток данных при поиске
@@ -106,7 +91,7 @@ graph TB
     
     subgraph "Модуль импорта (src/google_docs.py)"
         ImportDoc[import_document]
-        ParseSections[parse_html_sections]
+        ParseSections[parse_markdown_sections]
     end
     
     subgraph "Обработчики (src/handlers/messages.py)"
@@ -115,13 +100,13 @@ graph TB
     end
     
     subgraph "Внешние источники"
-        ModelFile[models/paraphrase-multilingual-MiniLM-L12-v2]
+        ModelFile[models/intfloat/multilingual-e5-small]
         CacheFile[data/knowledge_cache.json]
-        HTMLFile[data/knowledge.html]
+        MDFile[data/knowledge.md]
     end
     
     ModelFile --> LoadModel
-    HTMLFile --> ParseSections
+    MDFile --> ParseSections
     ParseSections --> VectorizeSections
     VectorizeSections --> CacheFile
     
@@ -167,32 +152,3 @@ sequenceDiagram
     Note over Search,Model: Векторы разделов уже<br/>загружены в память
 ```
 
-## Последовательность операций при импорте
-
-```mermaid
-sequenceDiagram
-    participant Admin as Администратор
-    participant GoogleDocs as google_docs.py
-    participant Search as search.py
-    participant Model as Embedding Model
-    participant Cache as knowledge_cache.json
-    
-    Admin->>GoogleDocs: import_document(url)
-    GoogleDocs->>GoogleDocs: fetch_document_zip()
-    GoogleDocs->>GoogleDocs: extract_files_from_zip()
-    GoogleDocs->>GoogleDocs: parse_html_sections()
-    
-    GoogleDocs->>Search: build_embeddings_from_html()
-    Search->>Model: load_embedding_model()
-    Model-->>Search: model
-    
-    Search->>Search: vectorize_sections(sections)
-    Search->>Model: encode(sections)
-    Model-->>Search: embeddings (tensor)
-    
-    Search->>Cache: save_embeddings_to_cache()
-    Cache-->>Search: OK
-    
-    Search-->>GoogleDocs: embeddings
-    GoogleDocs-->>Admin: Импорт завершен
-```
