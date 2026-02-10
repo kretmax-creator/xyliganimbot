@@ -14,6 +14,6 @@ html2text==2020.1.16
 pyspellchecker==0.7.0
 
 # Embedding models для семантического поиска
-sentence-transformers==2.2.2
+sentence-transformers==3.4.1
 # torch: не указываем здесь. В Docker ставится CPU-only сборка (см. Dockerfile).
 # Локально: pip сам подтянет torch через sentence-transformers (по умолчанию CUDA-сборка с PyPI).
